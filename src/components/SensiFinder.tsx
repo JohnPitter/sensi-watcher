@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Target, RotateCcw, Check, Copy, Gamepad2, SlidersHorizontal } from 'lucide-react';
 import { games } from '../data/games';
-import { calcCm360, convertSensitivity } from '../engine/sensitivity';
+import { calcCm360, sensFromCm360, convertSensitivity } from '../engine/sensitivity';
 import { GameSelect } from './GameSelect';
 import { NumberInput } from './NumberInput';
 import { AimTrainer } from './AimTrainer';
@@ -170,22 +170,29 @@ export function SensiFinder() {
   }, [mode, psaPhase, handlePsaFeedback]);
 
   // Sensitivity factors per round: low sens feel, mid, high sens feel
-  const SENSITIVITY_FACTORS = [0.6, 1.0, 1.8];
+  const SENSITIVITY_FACTORS = [0.5, 0.8, 1.2, 2.0];
 
   // Minigame methods
   const startMinigame = useCallback(() => {
-    // Generate 3 sensitivity values: low, medium, high within game range
-    const range = game.sensRange;
-    const low = range[0] + (range[1] - range[0]) * 0.2;
-    const mid = range[0] + (range[1] - range[0]) * 0.4;
-    const high = range[0] + (range[1] - range[0]) * 0.65;
-    const values = [low, mid, high].map(v => Math.round(v * 100) / 100);
+    // Generate realistic sensitivities based on DPI using cm/360 reference
+    // Covers the full competitive range from arm aimers to wrist aimers
+    const testCm360 = [50, 35, 25, 15]; // ultra-low, low, balanced, high
+
+    const clamp = (v: number) => Math.max(game.sensRange[0], Math.min(game.sensRange[1], v));
+    const round = (v: number) => {
+      if (game.sensStep >= 1) return Math.round(v);
+      if (game.sensStep >= 0.1) return Math.round(v * 10) / 10;
+      if (game.sensStep >= 0.01) return Math.round(v * 100) / 100;
+      return Math.round(v * 1000) / 1000;
+    };
+
+    const values = testCm360.map(cm => round(clamp(sensFromCm360(cm, dpi, game.yaw))));
     setMiniSensValues(values);
     setMiniRounds([]);
     setMiniCurrentRound(0);
     setMiniPhase('playing');
     setMode('minigame');
-  }, [game]);
+  }, [game, dpi]);
 
   const handleMiniComplete = useCallback((results: { avgReaction: number; accuracy: number; score: number }) => {
     const sens = miniSensValues[miniCurrentRound];
