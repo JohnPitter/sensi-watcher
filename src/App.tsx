@@ -19,18 +19,18 @@ function App() {
               className="font-mono text-[11px] uppercase tracking-[1.4px]"
               style={{ color: 'rgba(255,255,255,0.5)' }}
             >
-              Sensitivity Converter
+              Sensi Watcher
             </span>
           </div>
           <h1 className="font-mono text-[48px] sm:text-[64px] lg:text-[80px] font-light leading-[0.9] tracking-tight text-white">
-            SENS
+            SENSI WATCHER
           </h1>
           <p
             className="font-sans text-[16px] max-w-[480px] leading-relaxed"
             style={{ color: 'rgba(255,255,255,0.5)' }}
           >
-            Convert your mouse sensitivity between FPS games.
-            Same muscle memory, every game.
+            Converta sua sensibilidade entre jogos de FPS.
+            Mesma muscle memory, em qualquer jogo.
           </p>
         </motion.header>
 
@@ -46,7 +46,7 @@ function App() {
             className="font-mono text-[11px] uppercase tracking-[1.4px]"
             style={{ color: 'rgba(255,255,255,0.3)' }}
           >
-            Sens Converter — Built for precision
+            Sensi Watcher — Built for precision
           </p>
         </footer>
       </div>

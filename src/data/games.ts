@@ -66,7 +66,7 @@ export const games: Game[] = [
   {
     id: 'r6-siege',
     name: 'Rainbow Six Siege',
-    yaw: 0.00223,
+    yaw: 0.00572958,
     defaultSens: 10,
     sensRange: [1, 100],
     sensStep: 1,
@@ -93,7 +93,7 @@ export const games: Game[] = [
   {
     id: 'bf2042',
     name: 'Battlefield 2042',
-    yaw: 0.0022,
+    yaw: 0.022,
     defaultSens: 25,
     sensRange: [1, 100],
     sensStep: 1,
@@ -111,7 +111,7 @@ export const games: Game[] = [
   {
     id: 'the-finals',
     name: 'The Finals',
-    yaw: 0.022,
+    yaw: 0.07,
     defaultSens: 2,
     sensRange: [0.1, 20],
     sensStep: 0.01,
@@ -138,7 +138,7 @@ export const games: Game[] = [
   {
     id: 'delta-force',
     name: 'Delta Force',
-    yaw: 0.022,
+    yaw: 0.07,
     defaultSens: 2,
     sensRange: [0.1, 20],
     sensStep: 0.01,
