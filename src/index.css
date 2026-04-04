@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, 'Roboto Mono', Menlo, Monaco, monospace;
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --color-xai-bg: #1f2228;
+  --color-xai-white: #ffffff;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+}
+
+::selection {
+  background-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+body {
+  margin: 0;
+  background-color: #1f2228;
+  color: #ffffff;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Utility: dim on hover (xAI pattern) */
+.hover-dim:hover {
+  opacity: 0.5;
+}
