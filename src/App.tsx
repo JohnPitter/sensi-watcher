@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { Crosshair } from 'lucide-react';
 import { Converter } from './components/Converter';
+import { SensiFinder } from './components/SensiFinder';
 
 function App() {
   return (
@@ -37,8 +38,16 @@ function App() {
         {/* Separator */}
         <div className="border-t border-[rgba(255,255,255,0.06)]" />
 
+        {/* Find ideal sensitivity */}
+        <SensiFinder />
+
+        {/* Separator */}
+        <div className="border-t border-[rgba(255,255,255,0.06)]" />
+
         {/* Converter (includes all games table + playstyle guide) */}
-        <Converter />
+        <div id="converter">
+          <Converter />
+        </div>
 
         {/* Footer */}
         <footer className="border-t border-[rgba(255,255,255,0.06)] pt-8">
