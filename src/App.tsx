@@ -4,17 +4,23 @@ import { Crosshair } from 'lucide-react';
 import { Converter } from './components/Converter';
 import { SensiFinder } from './components/SensiFinder';
 import { PlaystyleGuide } from './components/PlaystyleGuide';
+import { LandingHero } from './components/LandingHero';
 
-type Tab = 'converter' | 'finder' | 'guide';
+type Tab = 'home' | 'converter' | 'finder' | 'guide';
 
-const TABS: { id: Tab; label: string }[] = [
+const NAV_TABS: { id: Tab; label: string }[] = [
   { id: 'converter', label: 'CONVERTER' },
   { id: 'finder', label: 'ENCONTRAR SENS' },
   { id: 'guide', label: 'GUIA' },
 ];
 
 function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('converter');
+  const [activeTab, setActiveTab] = useState<Tab>('home');
+
+  function handleNavigate(tab: 'converter' | 'finder' | 'guide') {
+    setActiveTab(tab);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   return (
     <div className="min-h-screen font-sans" style={{ background: '#1f2228', color: '#ffffff' }}>
@@ -23,24 +29,27 @@ function App() {
         className="sticky top-0 z-50 w-full border-b border-[rgba(255,255,255,0.08)]"
         style={{ background: '#1f2228' }}
       >
-        <div className="max-w-[1200px] mx-auto px-5 sm:px-8 flex items-center justify-between h-14">
-          {/* Logo */}
-          <div className="flex items-center gap-3 shrink-0">
+        <div className="max-w-[1200px] mx-auto px-4 sm:px-8 flex items-center justify-between h-14">
+          {/* Logo — clickable, returns to home */}
+          <button
+            onClick={() => setActiveTab('home')}
+            className="flex items-center gap-2.5 shrink-0 hover:opacity-50 transition-opacity"
+          >
             <Crosshair size={16} strokeWidth={1.5} style={{ color: 'rgba(255,255,255,0.5)' }} />
-            <span className="font-mono text-[13px] uppercase tracking-[1.4px] text-white font-medium">
+            <span className="font-mono text-[12px] sm:text-[13px] uppercase tracking-[1.4px] text-white font-medium">
               Sensi Watcher
             </span>
-          </div>
+          </button>
 
           {/* Tab navigation */}
           <div className="flex items-center gap-0">
-            {TABS.map((tab) => (
+            {NAV_TABS.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className="relative font-mono text-[11px] uppercase tracking-[1.4px] px-4 sm:px-5 py-4 transition-opacity cursor-pointer"
+                className="relative font-mono text-[10px] sm:text-[11px] uppercase tracking-[1.4px] px-3 sm:px-5 py-4 transition-opacity cursor-pointer"
                 style={{
-                  color: activeTab === tab.id ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.4)',
+                  color: activeTab === tab.id ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.35)',
                 }}
               >
                 {tab.label}
@@ -58,8 +67,20 @@ function App() {
       </nav>
 
       {/* Content area */}
-      <main className="max-w-[1200px] mx-auto px-5 sm:px-8 py-10 sm:py-14">
+      <main className="max-w-[1200px] mx-auto px-4 sm:px-8 py-8 sm:py-12">
         <AnimatePresence mode="wait">
+          {activeTab === 'home' && (
+            <motion.div
+              key="home"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.3 }}
+            >
+              <LandingHero onNavigate={handleNavigate} />
+            </motion.div>
+          )}
+
           {activeTab === 'converter' && (
             <motion.div
               key="converter"
@@ -100,10 +121,10 @@ function App() {
 
       {/* Footer */}
       <footer className="border-t border-[rgba(255,255,255,0.06)]">
-        <div className="max-w-[1200px] mx-auto px-5 sm:px-8 py-8">
+        <div className="max-w-[1200px] mx-auto px-4 sm:px-8 py-8">
           <p
             className="font-mono text-[11px] uppercase tracking-[1.4px]"
-            style={{ color: 'rgba(255,255,255,0.3)' }}
+            style={{ color: 'rgba(255,255,255,0.2)' }}
           >
             Sensi Watcher — Built for precision
           </p>
