@@ -7,7 +7,6 @@ import { GameSelect } from './GameSelect';
 import { NumberInput } from './NumberInput';
 import { StatBlock } from './StatBlock';
 import { AllGamesTable } from './AllGamesTable';
-import { PlaystyleGuide } from './PlaystyleGuide';
 
 const DPI_PRESETS = [400, 800, 1600, 3200];
 
@@ -164,17 +163,8 @@ export function Converter() {
         </div>
       </div>
 
-      {/* Separator */}
-      <div className="border-t border-[rgba(255,255,255,0.06)]" />
-
       {/* All games */}
       <AllGamesTable sourceGame={sourceGame} sourceSens={sourceSens} dpi={dpi} />
-
-      {/* Separator */}
-      <div className="border-t border-[rgba(255,255,255,0.06)]" />
-
-      {/* Playstyle guide */}
-      <PlaystyleGuide currentCm360={cm360} />
     </motion.section>
   );
 }

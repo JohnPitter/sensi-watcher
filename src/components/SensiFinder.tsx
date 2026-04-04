@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Target, RotateCcw, Check, ArrowRight, Copy, Gamepad2, SlidersHorizontal } from 'lucide-react';
+import { Target, RotateCcw, Check, Copy, Gamepad2, SlidersHorizontal } from 'lucide-react';
 import { games } from '../data/games';
 import { calcCm360, convertSensitivity } from '../engine/sensitivity';
 import { GameSelect } from './GameSelect';
@@ -94,9 +94,6 @@ function ResultDisplay({ game, sens, dpi, rounds, onRestart }: {
         <button onClick={onRestart} className="flex items-center gap-2 font-mono text-[13px] uppercase tracking-[1.4px] px-5 py-3 border border-[rgba(255,255,255,0.2)] hover:bg-[rgba(255,255,255,0.05)] transition-colors">
           <RotateCcw size={14} /> Testar novamente
         </button>
-        <button onClick={() => document.getElementById('converter')?.scrollIntoView({ behavior: 'smooth' })} className="flex items-center gap-2 font-mono text-[13px] uppercase tracking-[1.4px] px-5 py-3 border border-[rgba(255,255,255,0.2)] hover:bg-[rgba(255,255,255,0.05)] transition-colors">
-          <ArrowRight size={14} /> Usar no conversor
-        </button>
       </div>
     </div>
   );
@@ -171,6 +168,9 @@ export function SensiFinder() {
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
   }, [mode, psaPhase, handlePsaFeedback]);
+
+  // Sensitivity factors per round: low sens feel, mid, high sens feel
+  const SENSITIVITY_FACTORS = [0.6, 1.0, 1.8];
 
   // Minigame methods
   const startMinigame = useCallback(() => {
@@ -354,7 +354,7 @@ export function SensiFinder() {
               <span className="font-mono text-[32px] font-light text-white">{miniSensValues[miniCurrentRound]?.toFixed(2)}</span>
             </div>
 
-            <AimTrainer onComplete={handleMiniComplete} />
+            <AimTrainer sensitivityFactor={SENSITIVITY_FACTORS[miniCurrentRound] ?? 1.0} onComplete={handleMiniComplete} />
 
             <button onClick={restart} className="flex items-center gap-2 font-mono text-[12px] uppercase tracking-[1.4px] self-start hover:opacity-50 transition-opacity" style={{ color: 'rgba(255,255,255,0.5)' }}>
               <RotateCcw size={14} /> Cancelar

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Maximize2, Minimize2, Monitor } from 'lucide-react';
 
 interface AimTarget {
   id: number;
@@ -14,41 +15,52 @@ interface AimTarget {
 
 interface HitResult {
   reactionMs: number;
-  distance: number; // how far from center the click was
+  distance: number;
 }
 
 interface AimTrainerProps {
+  sensitivityFactor?: number;
   onComplete: (results: { avgReaction: number; accuracy: number; score: number }) => void;
 }
 
 const ARENA_W = 700;
 const ARENA_H = 420;
 const ROUND_TARGETS = 20;
-const TARGET_LIFETIME = 3000;
-const TARGET_MIN_SIZE = 28;
-const TARGET_MAX_SIZE = 48;
+
+const BASE_TARGET_LIFETIME = 3000;
+const BASE_MIN_SIZE = 28;
+const BASE_MAX_SIZE = 48;
+const BASE_MIN_SPEED = 0.3;
+const BASE_MAX_SPEED = 1.5;
+
+const MIN_TARGET_SIZE = 16;
+const MIN_LIFETIME = 1500;
 
 function randomBetween(min: number, max: number) {
   return Math.random() * (max - min) + min;
 }
 
-function spawnTarget(id: number): AimTarget {
-  const size = randomBetween(TARGET_MIN_SIZE, TARGET_MAX_SIZE);
-  const speed = randomBetween(0.3, 1.5);
-  const angle = Math.random() * Math.PI * 2;
-  return {
-    id,
-    x: randomBetween(size, ARENA_W - size),
-    y: randomBetween(size, ARENA_H - size),
-    size,
-    speed,
-    dx: Math.cos(angle) * speed,
-    dy: Math.sin(angle) * speed,
-    spawnedAt: Date.now(),
-  };
+function createSpawner(factor: number) {
+  const minSize = Math.max(MIN_TARGET_SIZE, BASE_MIN_SIZE / factor);
+  const maxSize = Math.max(MIN_TARGET_SIZE, BASE_MAX_SIZE / factor);
+  const minSpeed = BASE_MIN_SPEED * factor;
+  const maxSpeed = BASE_MAX_SPEED * factor;
+  const lifetime = Math.max(MIN_LIFETIME, BASE_TARGET_LIFETIME / factor);
+
+  return { minSize, maxSize, minSpeed, maxSpeed, lifetime };
 }
 
-export function AimTrainer({ onComplete }: AimTrainerProps) {
+type ArenaSize = 'compact' | 'medium' | 'fullscreen';
+
+const ARENA_SIZES: Record<ArenaSize, { label: string; icon: typeof Minimize2; maxW: string; aspectRatio: string }> = {
+  compact: { label: 'COMPACT', icon: Minimize2, maxW: '500px', aspectRatio: `${ARENA_W} / ${ARENA_H}` },
+  medium: { label: 'MEDIUM', icon: Monitor, maxW: '900px', aspectRatio: '16 / 9' },
+  fullscreen: { label: 'FULL', icon: Maximize2, maxW: '100%', aspectRatio: '16 / 9' },
+};
+
+export function AimTrainer({ sensitivityFactor = 1.0, onComplete }: AimTrainerProps) {
+  const params = createSpawner(sensitivityFactor);
+
   const [phase, setPhase] = useState<'ready' | 'playing' | 'done'>('ready');
   const [targets, setTargets] = useState<AimTarget[]>([]);
   const [hits, setHits] = useState<HitResult[]>([]);
@@ -56,12 +68,32 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
   const [score, setScore] = useState(0);
   const [targetsSpawned, setTargetsSpawned] = useState(0);
   const [countdown, setCountdown] = useState(3);
+  const [arenaSize, setArenaSize] = useState<ArenaSize>('medium');
   const arenaRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<number>(0);
   const spawnTimerRef = useRef<number>(0);
-  const lastSpawnRef = useRef(0);
+  const paramsRef = useRef(params);
+  paramsRef.current = params;
 
-  // Start game
+  const currentArena = ARENA_SIZES[arenaSize];
+
+  const spawnTarget = useCallback((id: number): AimTarget => {
+    const p = paramsRef.current;
+    const size = randomBetween(p.minSize, p.maxSize);
+    const speed = randomBetween(p.minSpeed, p.maxSpeed);
+    const angle = Math.random() * Math.PI * 2;
+    return {
+      id,
+      x: randomBetween(size, ARENA_W - size),
+      y: randomBetween(size, ARENA_H - size),
+      size,
+      speed,
+      dx: Math.cos(angle) * speed,
+      dy: Math.sin(angle) * speed,
+      spawnedAt: Date.now(),
+    };
+  }, []);
+
   const startGame = useCallback(() => {
     setCountdown(3);
     setPhase('ready');
@@ -78,7 +110,6 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
       if (c === 0) {
         clearInterval(interval);
         setPhase('playing');
-        lastSpawnRef.current = Date.now();
       }
     }, 800);
   }, []);
@@ -91,10 +122,9 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
       setTargetsSpawned(prev => {
         if (prev >= ROUND_TARGETS) return prev;
         setTargets(t => {
-          // Remove expired targets
           const now = Date.now();
-          const alive = t.filter(target => now - target.spawnedAt < TARGET_LIFETIME);
-          // Spawn new if under limit
+          const lifetime = paramsRef.current.lifetime;
+          const alive = t.filter(target => now - target.spawnedAt < lifetime);
           if (alive.length < 3 && prev < ROUND_TARGETS) {
             return [...alive, spawnTarget(prev + 1)];
           }
@@ -105,7 +135,7 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
     }, 800);
 
     return () => clearInterval(spawnTimerRef.current);
-  }, [phase]);
+  }, [phase, spawnTarget]);
 
   // Animate targets movement
   useEffect(() => {
@@ -118,12 +148,11 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
         let ndx = t.dx;
         let ndy = t.dy;
 
-        // Bounce off walls
         if (nx <= t.size / 2 || nx >= ARENA_W - t.size / 2) { ndx = -ndx; nx = Math.max(t.size / 2, Math.min(nx, ARENA_W - t.size / 2)); }
         if (ny <= t.size / 2 || ny >= ARENA_H - t.size / 2) { ndy = -ndy; ny = Math.max(t.size / 2, Math.min(ny, ARENA_H - t.size / 2)); }
 
         return { ...t, x: nx, y: ny, dx: ndx, dy: ndy };
-      }).filter(t => Date.now() - t.spawnedAt < TARGET_LIFETIME));
+      }).filter(t => Date.now() - t.spawnedAt < paramsRef.current.lifetime));
 
       frameRef.current = requestAnimationFrame(animate);
     }
@@ -144,7 +173,6 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
     }
   }, [phase, targetsSpawned, targets, hits, misses, score, onComplete]);
 
-  // Handle click on target
   const handleTargetClick = useCallback((target: AimTarget, e: React.MouseEvent) => {
     e.stopPropagation();
     const reaction = Date.now() - target.spawnedAt;
@@ -156,13 +184,11 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
     setHits(prev => [...prev, { reactionMs: reaction, distance }]);
     setTargets(prev => prev.filter(t => t.id !== target.id));
 
-    // Score: faster + more centered = more points
     const timeBonus = Math.max(0, 1000 - reaction);
     const accuracyBonus = Math.max(0, 100 - distance * 3);
     setScore(prev => prev + Math.round(timeBonus + accuracyBonus));
   }, []);
 
-  // Handle miss (click on empty area)
   const handleArenaMiss = useCallback(() => {
     if (phase === 'playing') {
       setMisses(prev => prev + 1);
@@ -170,14 +196,42 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
   }, [phase]);
 
   const progress = targetsSpawned / ROUND_TARGETS;
+  const lifetime = params.lifetime;
+
+  const difficultyLabel = sensitivityFactor <= 0.7 ? 'Facil' : sensitivityFactor <= 1.3 ? 'Medio' : 'Dificil';
 
   return (
-    <div className="flex flex-col gap-4">
-      {/* HUD */}
-      <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.5)' }}>
-        <span>Alvos: {hits.length}/{ROUND_TARGETS}</span>
-        <span>Score: {score}</span>
-        <span>Erros: {misses}</span>
+    <div className="flex flex-col gap-3">
+      {/* HUD + Size toggle */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-4 font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.5)' }}>
+          <span>Alvos: {hits.length}/{ROUND_TARGETS}</span>
+          <span>{difficultyLabel}</span>
+          <span>Score: {score}</span>
+          <span>Erros: {misses}</span>
+        </div>
+
+        {/* Arena size toggle */}
+        <div className="flex items-center gap-1">
+          {(Object.entries(ARENA_SIZES) as [ArenaSize, typeof ARENA_SIZES[ArenaSize]][]).map(([key, cfg]) => {
+            const Icon = cfg.icon;
+            return (
+              <button
+                key={key}
+                onClick={() => setArenaSize(key)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-[1.4px] border transition-all"
+                style={{
+                  borderColor: arenaSize === key ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.08)',
+                  color: arenaSize === key ? '#fff' : 'rgba(255,255,255,0.3)',
+                  background: arenaSize === key ? 'rgba(255,255,255,0.05)' : 'transparent',
+                }}
+              >
+                <Icon size={12} />
+                <span className="hidden sm:inline">{cfg.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Progress bar */}
@@ -196,10 +250,11 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
         className="relative overflow-hidden cursor-crosshair select-none border border-[rgba(255,255,255,0.1)]"
         style={{
           width: '100%',
-          maxWidth: ARENA_W,
-          aspectRatio: `${ARENA_W} / ${ARENA_H}`,
+          maxWidth: currentArena.maxW,
+          aspectRatio: currentArena.aspectRatio,
           background: 'rgba(255,255,255,0.02)',
           margin: '0 auto',
+          transition: 'max-width 0.3s ease, aspect-ratio 0.3s ease',
         }}
       >
         {/* Grid lines */}
@@ -292,7 +347,7 @@ export function AimTrainer({ onComplete }: AimTrainerProps) {
                     stroke="#1f2228"
                     strokeWidth="2"
                     strokeDasharray={`${Math.PI * scaledSize * 0.9}`}
-                    strokeDashoffset={`${Math.PI * scaledSize * 0.9 * Math.max(0, 1 - (Date.now() - target.spawnedAt) / TARGET_LIFETIME)}`}
+                    strokeDashoffset={`${Math.PI * scaledSize * 0.9 * Math.max(0, 1 - (Date.now() - target.spawnedAt) / lifetime)}`}
                   />
                 </svg>
               </motion.div>
