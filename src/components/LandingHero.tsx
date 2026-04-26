@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Crosshair, ArrowRight, Gamepad2, SlidersHorizontal, BookOpen, Zap } from 'lucide-react';
+import { Crosshair, ArrowRight, Gamepad2, SlidersHorizontal, BookOpen, Zap, Target } from 'lucide-react';
 
 interface LandingHeroProps {
-  onNavigate: (tab: 'converter' | 'finder' | 'guide') => void;
+  onNavigate: (tab: 'converter' | 'finder' | 'guide' | 'trainer') => void;
 }
 
 // Simulated kill feed entries
@@ -105,7 +105,7 @@ export function LandingHero({ onNavigate }: LandingHeroProps) {
     return () => { clearInterval(feedInterval); clearTimeout(statsTimer); };
   }, []);
 
-  const handleFeatureClick = useCallback((tab: 'converter' | 'finder' | 'guide') => {
+  const handleFeatureClick = useCallback((tab: 'converter' | 'finder' | 'guide' | 'trainer') => {
     onNavigate(tab);
   }, [onNavigate]);
 
@@ -234,7 +234,7 @@ export function LandingHero({ onNavigate }: LandingHeroProps) {
       </div>
 
       {/* Feature cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <motion.button
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
@@ -293,6 +293,33 @@ export function LandingHero({ onNavigate }: LandingHeroProps) {
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.8 }}
+          onClick={() => handleFeatureClick('trainer')}
+          className="flex flex-col gap-4 p-6 border border-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.2)] transition-all text-left group"
+          style={{ background: 'rgba(255,255,255,0.02)' }}
+        >
+          <div className="flex items-center justify-between">
+            <Target size={20} style={{ color: 'rgba(255,255,255,0.5)' }} />
+            <ArrowRight size={14} className="opacity-0 group-hover:opacity-50 transition-opacity" />
+          </div>
+          <div>
+            <h3 className="font-mono text-[13px] uppercase tracking-[1.4px] text-white mb-2">Treino de Mira</h3>
+            <p className="text-[13px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.4)' }}>
+              Gridshot, Flick, Micro e Tracking. 4 modos, 3 dificuldades, ranking S–D.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5 mt-auto">
+            {['GRIDSHOT', 'FLICK', 'TRACKING'].map(tag => (
+              <span key={tag} className="font-mono text-[9px] uppercase tracking-[1px] px-2 py-0.5 border border-[rgba(255,255,255,0.1)]" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                {tag}
+              </span>
+            ))}
+          </div>
+        </motion.button>
+
+        <motion.button
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.95 }}
           onClick={() => handleFeatureClick('guide')}
           className="flex flex-col gap-4 p-6 border border-[rgba(255,255,255,0.08)] hover:border-[rgba(255,255,255,0.2)] transition-all text-left group"
           style={{ background: 'rgba(255,255,255,0.02)' }}

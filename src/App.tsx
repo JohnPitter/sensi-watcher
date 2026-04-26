@@ -5,19 +5,21 @@ import { Converter } from './components/Converter';
 import { SensiFinder } from './components/SensiFinder';
 import { PlaystyleGuide } from './components/PlaystyleGuide';
 import { LandingHero } from './components/LandingHero';
+import { AimLab } from './components/AimLab';
 
-type Tab = 'home' | 'converter' | 'finder' | 'guide';
+type Tab = 'home' | 'converter' | 'finder' | 'guide' | 'trainer';
 
 const NAV_TABS: { id: Tab; label: string }[] = [
   { id: 'converter', label: 'CONVERTER' },
   { id: 'finder', label: 'ENCONTRAR SENS' },
+  { id: 'trainer', label: 'TREINO' },
   { id: 'guide', label: 'GUIA' },
 ];
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('home');
 
-  function handleNavigate(tab: 'converter' | 'finder' | 'guide') {
+  function handleNavigate(tab: 'converter' | 'finder' | 'guide' | 'trainer') {
     setActiveTab(tab);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -102,6 +104,18 @@ function App() {
               transition={{ duration: 0.25 }}
             >
               <SensiFinder />
+            </motion.div>
+          )}
+
+          {activeTab === 'trainer' && (
+            <motion.div
+              key="trainer"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.25 }}
+            >
+              <AimLab />
             </motion.div>
           )}
 
