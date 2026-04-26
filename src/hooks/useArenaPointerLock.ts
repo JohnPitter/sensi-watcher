@@ -13,6 +13,7 @@ interface Result {
   cursorRef: RefObject<HTMLDivElement | null>;
   posRef: RefObject<{ x: number; y: number }>;
   exit: () => void;
+  requestLock: () => void;
 }
 
 /**
@@ -70,14 +71,9 @@ export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: O
 
       if (!arena) return;
 
-      if (document.pointerLockElement !== arena) {
-        // Not locked: engage lock and swallow the click
-        e.preventDefault();
-        e.stopPropagation();
-        const req = (arena as HTMLElement & { requestPointerLock?: () => void }).requestPointerLock;
-        if (req) req.call(arena);
-        return;
-      }
+      // When not locked, do nothing here — overlay's onClick handles engagement
+      // via the explicit requestLock() function (guaranteed user-gesture binding).
+      if (document.pointerLockElement !== arena) return;
 
       // Locked: synthesize a click at the virtual cursor's position
       e.preventDefault();
@@ -120,5 +116,23 @@ export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: O
     if (document.pointerLockElement) document.exitPointerLock?.();
   }
 
-  return { isLocked, cursorRef, posRef, exit };
+  function requestLock() {
+    const arena = arenaRef.current;
+    if (!arena) return;
+    if (document.pointerLockElement === arena) return;
+    const req = (arena as HTMLElement & { requestPointerLock?: () => Promise<void> | void }).requestPointerLock;
+    if (req) {
+      try {
+        const result = req.call(arena);
+        // Some browsers return a promise that may reject silently — surface for debug
+        if (result && typeof (result as Promise<void>).catch === 'function') {
+          (result as Promise<void>).catch(err => console.warn('[pointer-lock] failed:', err));
+        }
+      } catch (err) {
+        console.warn('[pointer-lock] threw:', err);
+      }
+    }
+  }
+
+  return { isLocked, cursorRef, posRef, exit, requestLock };
 }

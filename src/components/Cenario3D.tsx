@@ -237,7 +237,7 @@ export function Cenario3D({
 }: Cenario3DProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  const { isLocked, cursorRef } = useArenaPointerLock({
+  const { isLocked, cursorRef, requestLock } = useArenaPointerLock({
     arenaRef: wrapRef,
     sensitivity,
     active: true,
@@ -288,11 +288,19 @@ export function Cenario3D({
 
       {/* "CLIQUE PARA APONTAR" overlay when not locked */}
       {!isLocked && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ background: 'rgba(10,14,21,0.55)', zIndex: 4 }}>
-          <span className="font-mono text-[12px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.7)' }}>
-            Clique para apontar · ESC para sair · sens {sensitivity}×
+        <button
+          type="button"
+          onClick={requestLock}
+          className="absolute inset-0 flex items-center justify-center cursor-pointer"
+          style={{ background: 'rgba(10,14,21,0.2)', zIndex: 10, border: 'none' }}
+        >
+          <span
+            className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)]"
+            style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(10,14,21,0.85)' }}
+          >
+            Clique para apontar · sens {sensitivity}× · ESC para sair
           </span>
-        </div>
+        </button>
       )}
 
       {/* Bottom-corner mode labels */}
