@@ -255,6 +255,11 @@ export function Cenario3D({
     >
       <Canvas
         camera={{ position: [0, 1.6, 0], fov: 78, near: 0.05, far: 60 }}
+        onCreated={({ camera }) => {
+          // Make the camera look forward (-Z) instead of R3F's default lookAt(0,0,0)
+          // which from (0, 1.6, 0) ends up looking straight down at the floor.
+          camera.rotation.set(0, 0, 0);
+        }}
         onPointerMissed={() => onMiss()}
         gl={{ antialias: true, alpha: false }}
         shadows
