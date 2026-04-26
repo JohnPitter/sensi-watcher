@@ -10,6 +10,7 @@ interface Options {
 
 interface Result {
   isLocked: boolean;
+  cooldown: boolean; // true while browser-imposed lock cooldown is in effect
   cursorRef: RefObject<HTMLDivElement | null>;
   posRef: RefObject<{ x: number; y: number }>;
   exit: () => void;
@@ -24,10 +25,12 @@ interface Result {
  */
 export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: Options): Result {
   const [isLocked, setIsLocked] = useState(false);
+  const [cooldown, setCooldown] = useState(false);
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const posRef = useRef({ x: 0, y: 0 });
   const sensRef = useRef(sensitivity);
   const onMoveRef = useRef(onMove);
+  const cooldownTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   sensRef.current = sensitivity;
   onMoveRef.current = onMove;
 
@@ -137,23 +140,55 @@ export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: O
     if (document.pointerLockElement) document.exitPointerLock?.();
   }
 
-  function requestLock() {
+  function tryEngage() {
     const arena = arenaRef.current;
     if (!arena) return;
     if (document.pointerLockElement === arena) return;
     const req = (arena as HTMLElement & { requestPointerLock?: () => Promise<void> | void }).requestPointerLock;
-    if (req) {
-      try {
-        const result = req.call(arena);
-        // Some browsers return a promise that may reject silently — surface for debug
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-          (result as Promise<void>).catch(err => console.warn('[pointer-lock] failed:', err));
-        }
-      } catch (err) {
-        console.warn('[pointer-lock] threw:', err);
+    if (!req) return;
+
+    try {
+      const result = req.call(arena);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch((err: unknown) => {
+          const name = (err as { name?: string } | null | undefined)?.name;
+          if (name === 'SecurityError') {
+            // Browser cooldown after a recent ESC — show feedback and retry once
+            // when the cooldown window passes (~1250ms per spec; using 1400ms).
+            setCooldown(true);
+            if (cooldownTimer.current) clearTimeout(cooldownTimer.current);
+            cooldownTimer.current = setTimeout(() => {
+              setCooldown(false);
+              cooldownTimer.current = null;
+              const a = arenaRef.current;
+              if (a && !document.pointerLockElement) {
+                const r = (a as HTMLElement & { requestPointerLock?: () => Promise<void> | void }).requestPointerLock?.call(a);
+                if (r && typeof (r as Promise<void>).catch === 'function') {
+                  (r as Promise<void>).catch(() => {
+                    // Silent — overlay will reappear and user clicks again
+                  });
+                }
+              }
+            }, 1400);
+          } else {
+            console.warn('[pointer-lock] failed:', err);
+          }
+        });
       }
+    } catch (err) {
+      console.warn('[pointer-lock] threw:', err);
     }
   }
 
-  return { isLocked, cursorRef, posRef, exit, requestLock };
+  function requestLock() {
+    if (cooldown) return; // Already waiting — don't pile up requests
+    tryEngage();
+  }
+
+  // Cleanup pending cooldown timer on unmount
+  useEffect(() => () => {
+    if (cooldownTimer.current) clearTimeout(cooldownTimer.current);
+  }, []);
+
+  return { isLocked, cooldown, cursorRef, posRef, exit, requestLock };
 }

@@ -237,7 +237,7 @@ export function Cenario3D({
 }: Cenario3DProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  const { isLocked, cursorRef, requestLock } = useArenaPointerLock({
+  const { isLocked, cooldown, cursorRef, requestLock } = useArenaPointerLock({
     arenaRef: wrapRef,
     sensitivity,
     active: true,
@@ -255,13 +255,18 @@ export function Cenario3D({
     >
       <Canvas
         camera={{ position: [0, 1.6, 0], fov: 78, near: 0.05, far: 60 }}
-        onCreated={({ camera }) => {
-          // Make the camera look forward (-Z) instead of R3F's default lookAt(0,0,0)
-          // which from (0, 1.6, 0) ends up looking straight down at the floor.
+        onCreated={({ camera, gl }) => {
+          // Look forward (-Z) instead of R3F default lookAt(0,0,0).
           camera.rotation.set(0, 0, 0);
+          // Try to recover gracefully if the WebGL context is lost (browser
+          // sometimes drops contexts when too many are open or after long sessions).
+          gl.domElement.addEventListener('webglcontextlost', (e) => {
+            e.preventDefault();
+            console.warn('[cenario3d] webgl context lost — refresh the page to restore');
+          });
         }}
         onPointerMissed={() => onMiss()}
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: true, alpha: false, powerPreference: 'default' }}
         shadows
         dpr={[1, 2]}
       >
@@ -296,14 +301,22 @@ export function Cenario3D({
         <button
           type="button"
           onClick={requestLock}
-          className="absolute inset-0 flex items-center justify-center cursor-pointer"
-          style={{ background: 'rgba(10,14,21,0.2)', zIndex: 10, border: 'none' }}
+          disabled={cooldown}
+          className="absolute inset-0 flex items-center justify-center"
+          style={{
+            background: 'rgba(10,14,21,0.2)',
+            zIndex: 10,
+            border: 'none',
+            cursor: cooldown ? 'wait' : 'pointer',
+          }}
         >
           <span
             className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)]"
             style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(10,14,21,0.85)' }}
           >
-            Clique para apontar · sens {sensitivity}× · ESC para sair
+            {cooldown
+              ? 'Aguarde 1s... (cooldown do browser)'
+              : `Clique para apontar · sens ${sensitivity}× · ESC para sair`}
           </span>
         </button>
       )}

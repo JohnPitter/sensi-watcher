@@ -442,7 +442,12 @@ export function AimLab() {
   // Pointer lock for 2D arena (gridshot / flick / microflick / tracking).
   // Cenario3D has its own internal pointer lock since the arena lives there.
   const arena2DActive = phase === 'playing' && game.current?.drill !== 'cenario';
-  const { isLocked: arena2DLocked, cursorRef: arena2DCursorRef, requestLock: arena2DRequestLock } = useArenaPointerLock({
+  const {
+    isLocked: arena2DLocked,
+    cooldown: arena2DCooldown,
+    cursorRef: arena2DCursorRef,
+    requestLock: arena2DRequestLock,
+  } = useArenaPointerLock({
     arenaRef,
     sensitivity: mouseSens,
     active: arena2DActive,
@@ -782,14 +787,22 @@ export function AimLab() {
                 <button
                   type="button"
                   onClick={arena2DRequestLock}
-                  className="absolute inset-0 flex items-center justify-center cursor-pointer"
-                  style={{ background: 'rgba(31,34,40,0.2)', zIndex: 10, border: 'none' }}
+                  disabled={arena2DCooldown}
+                  className="absolute inset-0 flex items-center justify-center"
+                  style={{
+                    background: 'rgba(31,34,40,0.2)',
+                    zIndex: 10,
+                    border: 'none',
+                    cursor: arena2DCooldown ? 'wait' : 'pointer',
+                  }}
                 >
                   <span
                     className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)]"
                     style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(31,34,40,0.85)' }}
                   >
-                    Clique para apontar · sens {mouseSens}× · ESC para sair
+                    {arena2DCooldown
+                      ? 'Aguarde 1s... (cooldown do browser)'
+                      : `Clique para apontar · sens ${mouseSens}× · ESC para sair`}
                   </span>
                 </button>
               )}
