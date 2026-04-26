@@ -13,6 +13,15 @@ export const CROSSHAIR_OPTIONS: { id: CrosshairStyle; label: string }[] = [
   { id: 'chevron',   label: 'Chevron' },
 ];
 
+export const SENS_PRESETS: { value: number; label: string }[] = [
+  { value: 0.5,  label: '0.5×' },
+  { value: 0.75, label: '0.75×' },
+  { value: 1.0,  label: '1×' },
+  { value: 1.25, label: '1.25×' },
+  { value: 1.5,  label: '1.5×' },
+  { value: 2.0,  label: '2×' },
+];
+
 export const ENEMY_COLORS: { id: EnemyColorId; label: string; head: string; body: string }[] = [
   { id: 'cyan',   label: 'Ciano',    head: '#50d7eb', body: '#3cb9d2' },
   { id: 'red',    label: 'Vermelho', head: '#ff5566', body: '#d6404e' },

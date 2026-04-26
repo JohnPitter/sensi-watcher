@@ -3,12 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Target, RotateCcw, Clock } from 'lucide-react';
 import type { Wall3D } from './Cenario3D';
 import type { CrosshairStyle, EnemyColorId } from './Cenario3DUI';
-import { CROSSHAIR_OPTIONS, ENEMY_COLORS, CrosshairPreview } from './Cenario3DUI';
+import { CROSSHAIR_OPTIONS, ENEMY_COLORS, SENS_PRESETS, CrosshairPreview, CrosshairShape } from './Cenario3DUI';
+import { useArenaPointerLock } from '../hooks/useArenaPointerLock';
 
 const Cenario3D = lazy(() => import('./Cenario3D').then(m => ({ default: m.Cenario3D })));
 
 const LS_CROSSHAIR = 'sensiwatch.cenario.crosshair';
 const LS_ENEMYCOL  = 'sensiwatch.cenario.enemyColor';
+const LS_SENS      = 'sensiwatch.mouse.sens';
 
 type DrillId = 'gridshot' | 'flick' | 'microflick' | 'tracking' | 'cenario';
 type Diff = 'easy' | 'medium' | 'hard';
@@ -141,8 +143,14 @@ export function AimLab() {
     if (typeof window === 'undefined') return 'cyan';
     return (localStorage.getItem(LS_ENEMYCOL) as EnemyColorId) || 'cyan';
   });
+  const [mouseSens, setMouseSens] = useState<number>(() => {
+    if (typeof window === 'undefined') return 1.0;
+    const v = parseFloat(localStorage.getItem(LS_SENS) || '1');
+    return isFinite(v) && v > 0 ? v : 1.0;
+  });
   useEffect(() => { localStorage.setItem(LS_CROSSHAIR, crosshair); }, [crosshair]);
   useEffect(() => { localStorage.setItem(LS_ENEMYCOL, enemyColor); }, [enemyColor]);
+  useEffect(() => { localStorage.setItem(LS_SENS, String(mouseSens)); }, [mouseSens]);
   const enemyPreset = ENEMY_COLORS.find(c => c.id === enemyColor) ?? ENEMY_COLORS[0];
 
   const hsRef = useRef(0);
@@ -431,6 +439,19 @@ export function AimLab() {
     };
   }, []);
 
+  // Pointer lock for 2D arena (gridshot / flick / microflick / tracking).
+  // Cenario3D has its own internal pointer lock since the arena lives there.
+  const arena2DActive = phase === 'playing' && game.current?.drill !== 'cenario';
+  const { isLocked: arena2DLocked, cursorRef: arena2DCursorRef } = useArenaPointerLock({
+    arenaRef,
+    sensitivity: mouseSens,
+    active: arena2DActive,
+    onMove: (vx, vy, w, h) => {
+      // Feed virtual cursor into mouse.current so the tracking drill sees it
+      mouse.current = { x: (vx / w) * VW, y: (vy / h) * VH };
+    },
+  });
+
   // 3D cenario: hit comes from Three.js scene with screen coords for popup
   const handleCenario3DHit = useCallback((tgt: { id: number; x: number; z: number; born: number }, isHead: boolean, sx: number, sy: number) => {
     const realTgt = tRef.current.find(t => t.id === tgt.id);
@@ -536,58 +557,83 @@ export function AimLab() {
               </div>
             </div>
 
-            {/* Cenario-only customization */}
-            {drill === 'cenario' && (
-              <>
-                <div className="flex flex-col gap-3">
-                  <span className="font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>Mira</span>
-                  <div className="flex gap-2 flex-wrap">
-                    {CROSSHAIR_OPTIONS.map(opt => (
-                      <button
-                        key={opt.id}
-                        onClick={() => setCrosshair(opt.id)}
-                        className="flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[1.4px] px-3 py-2 border transition-all"
-                        style={{
-                          borderColor: crosshair === opt.id ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)',
-                          color: crosshair === opt.id ? '#fff' : 'rgba(255,255,255,0.4)',
-                          background: crosshair === opt.id ? 'rgba(255,255,255,0.06)' : 'transparent',
-                        }}
-                      >
-                        <CrosshairPreview style={opt.id} />
-                        <span>{opt.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
+            {/* Sensibilidade (global, all modes) */}
+            <div className="flex flex-col gap-3">
+              <span className="font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                Sensibilidade do Mouse
+              </span>
+              <div className="flex gap-2 flex-wrap">
+                {SENS_PRESETS.map(p => (
+                  <button
+                    key={p.value}
+                    onClick={() => setMouseSens(p.value)}
+                    className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border transition-all"
+                    style={{
+                      borderColor: mouseSens === p.value ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)',
+                      color: mouseSens === p.value ? '#fff' : 'rgba(255,255,255,0.4)',
+                      background: mouseSens === p.value ? 'rgba(255,255,255,0.06)' : 'transparent',
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <span className="font-mono text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
+                Multiplicador aplicado via pointer lock — afeta todos os modos.
+              </span>
+            </div>
 
-                <div className="flex flex-col gap-3">
-                  <span className="font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>Cor dos Inimigos</span>
-                  <div className="flex gap-2 flex-wrap">
-                    {ENEMY_COLORS.map(c => (
-                      <button
-                        key={c.id}
-                        onClick={() => setEnemyColor(c.id)}
-                        className="flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[1.4px] px-3 py-2 border transition-all"
+            {/* Mira (global, all modes) */}
+            <div className="flex flex-col gap-3">
+              <span className="font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>Mira</span>
+              <div className="flex gap-2 flex-wrap">
+                {CROSSHAIR_OPTIONS.map(opt => (
+                  <button
+                    key={opt.id}
+                    onClick={() => setCrosshair(opt.id)}
+                    className="flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[1.4px] px-3 py-2 border transition-all"
+                    style={{
+                      borderColor: crosshair === opt.id ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)',
+                      color: crosshair === opt.id ? '#fff' : 'rgba(255,255,255,0.4)',
+                      background: crosshair === opt.id ? 'rgba(255,255,255,0.06)' : 'transparent',
+                    }}
+                  >
+                    <CrosshairPreview style={opt.id} />
+                    <span>{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Cor dos inimigos — só faz sentido no Cenário 3D */}
+            {drill === 'cenario' && (
+              <div className="flex flex-col gap-3">
+                <span className="font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>Cor dos Inimigos</span>
+                <div className="flex gap-2 flex-wrap">
+                  {ENEMY_COLORS.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => setEnemyColor(c.id)}
+                      className="flex items-center gap-2.5 font-mono text-[11px] uppercase tracking-[1.4px] px-3 py-2 border transition-all"
+                      style={{
+                        borderColor: enemyColor === c.id ? c.head : 'rgba(255,255,255,0.1)',
+                        color: enemyColor === c.id ? '#fff' : 'rgba(255,255,255,0.4)',
+                        background: enemyColor === c.id ? 'rgba(255,255,255,0.06)' : 'transparent',
+                      }}
+                    >
+                      <span
+                        className="rounded-full"
                         style={{
-                          borderColor: enemyColor === c.id ? c.head : 'rgba(255,255,255,0.1)',
-                          color: enemyColor === c.id ? '#fff' : 'rgba(255,255,255,0.4)',
-                          background: enemyColor === c.id ? 'rgba(255,255,255,0.06)' : 'transparent',
+                          width: 14, height: 14,
+                          background: c.head,
+                          boxShadow: enemyColor === c.id ? `0 0 8px ${c.head}` : 'none',
                         }}
-                      >
-                        <span
-                          className="rounded-full"
-                          style={{
-                            width: 14, height: 14,
-                            background: c.head,
-                            boxShadow: enemyColor === c.id ? `0 0 8px ${c.head}` : 'none',
-                          }}
-                        />
-                        <span>{c.label}</span>
-                      </button>
-                    ))}
-                  </div>
+                      />
+                      <span>{c.label}</span>
+                    </button>
+                  ))}
                 </div>
-              </>
+              </div>
             )}
 
             <button
@@ -664,6 +710,7 @@ export function AimLab() {
                     crosshair={crosshair}
                     enemyHead={enemyPreset.head}
                     enemyBody={enemyPreset.body}
+                    sensitivity={mouseSens}
                     onHit={handleCenario3DHit}
                     onMiss={handleCenario3DMiss}
                   />
@@ -697,8 +744,13 @@ export function AimLab() {
               ref={arenaRef}
               onClick={handleMiss}
               onMouseMove={handleMouseMove}
-              className="relative overflow-hidden cursor-crosshair select-none border border-[rgba(255,255,255,0.1)]"
-              style={{ width: '100%', aspectRatio: `${VW} / ${VH}`, background: 'rgba(255,255,255,0.02)' }}
+              className="relative overflow-hidden select-none border border-[rgba(255,255,255,0.1)]"
+              style={{
+                width: '100%',
+                aspectRatio: `${VW} / ${VH}`,
+                background: 'rgba(255,255,255,0.02)',
+                cursor: arena2DLocked ? 'none' : 'crosshair',
+              }}
             >
               {/* Grid lines */}
               <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ opacity: 0.035 }}>
@@ -710,11 +762,29 @@ export function AimLab() {
                 ))}
               </svg>
 
-              {/* Center crosshair */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ opacity: 0.08 }}>
-                <div className="w-6 h-px bg-white" />
-                <div className="absolute w-px h-6 bg-white" />
+              {/* Virtual cursor (driven by useArenaPointerLock when locked) */}
+              <div
+                ref={arena2DCursorRef}
+                className="absolute top-0 left-0 pointer-events-none"
+                style={{
+                  width: 22, height: 22,
+                  opacity: arena2DLocked ? 1 : 0,
+                  transition: 'opacity 0.15s',
+                  willChange: 'transform',
+                  zIndex: 5,
+                }}
+              >
+                <CrosshairShape style={crosshair} accentColor={enemyPreset.head} />
               </div>
+
+              {/* "CLIQUE PARA APONTAR" overlay when not locked */}
+              {!arena2DLocked && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ background: 'rgba(31,34,40,0.55)', zIndex: 4 }}>
+                  <span className="font-mono text-[12px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.7)' }}>
+                    Clique para apontar · ESC para sair · sens {mouseSens}×
+                  </span>
+                </div>
+              )}
 
               {/* Targets */}
               <AnimatePresence>

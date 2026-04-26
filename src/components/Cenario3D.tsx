@@ -1,9 +1,10 @@
-import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { Canvas, useFrame } from '@react-three/fiber';
 import type { ThreeEvent } from '@react-three/fiber';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CrosshairShape, type CrosshairStyle } from './Cenario3DUI';
-export { CROSSHAIR_OPTIONS, ENEMY_COLORS, CrosshairPreview } from './Cenario3DUI';
+import { useArenaPointerLock } from '../hooks/useArenaPointerLock';
+export { CROSSHAIR_OPTIONS, ENEMY_COLORS, CrosshairPreview, SENS_PRESETS } from './Cenario3DUI';
 export type { CrosshairStyle, EnemyColorId } from './Cenario3DUI';
 
 export interface Tgt3D {
@@ -29,6 +30,7 @@ interface Cenario3DProps {
   crosshair?: CrosshairStyle;
   enemyHead?: string;
   enemyBody?: string;
+  sensitivity?: number;
   onHit: (tgt: Tgt3D, isHead: boolean, screenX: number, screenY: number) => void;
   onMiss: () => void;
 }
@@ -159,40 +161,6 @@ function Humanoid({ tgt, ttl, headColor, bodyColor, onHit }: HumanoidProps) {
   );
 }
 
-// Subtle parallax camera that nudges very slightly toward cursor position
-// for depth feel — does NOT replace cursor aiming. Click raycast uses cursor.
-function ParallaxCamera() {
-  const { camera, gl } = useThree();
-  const targetYaw = useRef(0);
-  const targetPitch = useRef(0);
-  const yaw = useRef(0);
-  const pitch = useRef(0);
-
-  useEffect(() => {
-    const el = gl.domElement;
-    function onMove(e: MouseEvent) {
-      const rect = el.getBoundingClientRect();
-      const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
-      targetYaw.current = -nx * 0.08;
-      targetPitch.current = -ny * 0.05;
-    }
-    el.addEventListener('mousemove', onMove);
-    return () => el.removeEventListener('mousemove', onMove);
-  }, [gl]);
-
-  useFrame((_, dt) => {
-    const k = Math.min(1, dt * 8);
-    yaw.current   += (targetYaw.current   - yaw.current)   * k;
-    pitch.current += (targetPitch.current - pitch.current) * k;
-    camera.rotation.order = 'YXZ';
-    camera.rotation.y = yaw.current;
-    camera.rotation.x = pitch.current;
-  });
-
-  return null;
-}
-
 interface SceneProps {
   targets: Tgt3D[];
   walls: Wall3D[];
@@ -207,8 +175,6 @@ function Scene({ targets, walls, ttl, headColor, bodyColor, onHit }: SceneProps)
     <>
       <color attach="background" args={[COL_FOG]} />
       <fog attach="fog" args={[COL_FOG, 6, 22]} />
-
-      <ParallaxCamera />
 
       {/* Ambient + key light */}
       <ambientLight intensity={0.45} color="#6b8aab" />
@@ -266,36 +232,16 @@ export function Cenario3D({
   crosshair = 'cross',
   enemyHead = COL_HEAD_DEF,
   enemyBody = COL_BODY_DEF,
+  sensitivity = 1.0,
   onHit, onMiss,
 }: Cenario3DProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const crosshairRef = useRef<HTMLDivElement>(null);
-  const [insideCanvas, setInsideCanvas] = useState(false);
 
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-
-    function onMove(e: MouseEvent) {
-      const ch = crosshairRef.current;
-      if (!ch || !wrap) return;
-      const r = wrap.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      const y = e.clientY - r.top;
-      ch.style.transform = `translate(${x}px, ${y}px) translate(-50%, -50%)`;
-    }
-    function onEnter() { setInsideCanvas(true); }
-    function onLeave() { setInsideCanvas(false); }
-
-    wrap.addEventListener('mousemove', onMove);
-    wrap.addEventListener('mouseenter', onEnter);
-    wrap.addEventListener('mouseleave', onLeave);
-    return () => {
-      wrap.removeEventListener('mousemove', onMove);
-      wrap.removeEventListener('mouseenter', onEnter);
-      wrap.removeEventListener('mouseleave', onLeave);
-    };
-  }, []);
+  const { isLocked, cursorRef } = useArenaPointerLock({
+    arenaRef: wrapRef,
+    sensitivity,
+    active: true,
+  });
 
   return (
     <div
@@ -304,7 +250,7 @@ export function Cenario3D({
       style={{
         aspectRatio: '800 / 500',
         background: COL_FOG,
-        cursor: insideCanvas ? 'none' : 'default',
+        cursor: isLocked ? 'none' : 'default',
       }}
     >
       <Canvas
@@ -324,20 +270,30 @@ export function Cenario3D({
         />
       </Canvas>
 
-      {/* Crosshair — follows cursor */}
+      {/* Custom crosshair — driven by useArenaPointerLock when locked */}
       <div
-        ref={crosshairRef}
+        ref={cursorRef}
         className="absolute top-0 left-0 pointer-events-none"
         style={{
           width: 22,
           height: 22,
-          opacity: insideCanvas ? 1 : 0,
+          opacity: isLocked ? 1 : 0,
           transition: 'opacity 0.15s',
           willChange: 'transform',
+          zIndex: 5,
         }}
       >
         <CrosshairShape style={crosshair} accentColor={enemyHead} />
       </div>
+
+      {/* "CLIQUE PARA APONTAR" overlay when not locked */}
+      {!isLocked && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ background: 'rgba(10,14,21,0.55)', zIndex: 4 }}>
+          <span className="font-mono text-[12px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.7)' }}>
+            Clique para apontar · ESC para sair · sens {sensitivity}×
+          </span>
+        </div>
+      )}
 
       {/* Bottom-corner mode labels */}
       <div className="absolute bottom-3 left-3 font-mono text-[10px] uppercase tracking-[1.4px] pointer-events-none" style={{ color: 'rgba(255,255,255,0.3)' }}>
