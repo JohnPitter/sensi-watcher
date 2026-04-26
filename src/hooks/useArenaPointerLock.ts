@@ -31,6 +31,10 @@ export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: O
   sensRef.current = sensitivity;
   onMoveRef.current = onMove;
 
+  // Throwaway moves right after lockChange — browsers can fire a "warp"
+  // mousemove with extreme deltas that would clobber the centered position.
+  const ignoreMovesUntil = useRef(0);
+
   useEffect(() => {
     if (!active) return;
     const arena = arenaRef.current;
@@ -43,20 +47,37 @@ export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: O
       }
     }
 
+    function isLockedToArena() {
+      // Lenient check: if any element is locked and arena exists, treat as ours.
+      // The hook is single-instance per arena so this is safe.
+      const a = arenaRef.current;
+      return !!document.pointerLockElement && (document.pointerLockElement === a || !!a);
+    }
+
     function lockChange() {
-      const locked = document.pointerLockElement === arena;
+      const a = arenaRef.current;
+      const locked = !!document.pointerLockElement;
       setIsLocked(locked);
-      if (locked && arena) {
-        const rect = arena.getBoundingClientRect();
+      if (locked && a) {
+        const rect = a.getBoundingClientRect();
         posRef.current = { x: rect.width / 2, y: rect.height / 2 };
         paint();
         onMoveRef.current?.(posRef.current.x, posRef.current.y, rect.width, rect.height);
+        // Ignore the next ~120ms of mousemove events — the browser may fire a
+        // synthetic "warp" with extreme deltas that would clamp the cursor to
+        // the corner.
+        ignoreMovesUntil.current = performance.now() + 120;
       }
     }
 
     function move(e: MouseEvent) {
-      if (document.pointerLockElement !== arena || !arena) return;
-      const rect = arena.getBoundingClientRect();
+      const a = arenaRef.current;
+      if (!a || !isLockedToArena()) return;
+      if (performance.now() < ignoreMovesUntil.current) return;
+      // Sanity: drop pathological deltas (e.g. >500px in a single frame)
+      if (Math.abs(e.movementX) > 500 || Math.abs(e.movementY) > 500) return;
+
+      const rect = a.getBoundingClientRect();
       const s = sensRef.current;
       const nx = Math.max(0, Math.min(rect.width,  posRef.current.x + e.movementX * s));
       const ny = Math.max(0, Math.min(rect.height, posRef.current.y + e.movementY * s));
@@ -69,19 +90,19 @@ export function useArenaPointerLock({ arenaRef, sensitivity, active, onMove }: O
       // Our own re-dispatched click — let it through normally
       if ((e as unknown as { __virt?: boolean }).__virt) return;
 
-      if (!arena) return;
+      const a = arenaRef.current;
+      if (!a) return;
 
-      // When not locked, do nothing here — overlay's onClick handles engagement
-      // via the explicit requestLock() function (guaranteed user-gesture binding).
-      if (document.pointerLockElement !== arena) return;
+      // Not locked: let the overlay's onClick handle engagement via requestLock()
+      if (!isLockedToArena()) return;
 
       // Locked: synthesize a click at the virtual cursor's position
       e.preventDefault();
       e.stopPropagation();
-      const rect = arena.getBoundingClientRect();
+      const rect = a.getBoundingClientRect();
       const px = rect.left + posRef.current.x;
       const py = rect.top  + posRef.current.y;
-      const target = document.elementFromPoint(px, py) || arena;
+      const target = document.elementFromPoint(px, py) || a;
       const synth = new MouseEvent('click', {
         clientX: px, clientY: py,
         button: 0, buttons: 1,
