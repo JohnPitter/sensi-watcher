@@ -1,6 +1,6 @@
 import { Canvas, useFrame } from '@react-three/fiber';
 import type { ThreeEvent } from '@react-three/fiber';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { CrosshairShape, type CrosshairStyle } from './Cenario3DUI';
 import { useArenaPointerLock } from '../hooks/useArenaPointerLock';
@@ -12,6 +12,10 @@ export interface Tgt3D {
   x: number;
   z: number;
   born: number;
+  // Rush-mode walk velocity (units per second). When set, the target advances
+  // toward the player along Z (and optionally X) every frame.
+  vz?: number;
+  vx?: number;
 }
 
 export interface Wall3D {
@@ -31,6 +35,10 @@ interface Cenario3DProps {
   enemyHead?: string;
   enemyBody?: string;
   sensitivity?: number;
+  // Rush mode — camera shifts on X, walls/peek-spots are hidden, ttl is ignored
+  // (target lifetime is driven by Z movement instead).
+  rushMode?: boolean;
+  playerX?: number;
   onHit: (tgt: Tgt3D, isHead: boolean, screenX: number, screenY: number) => void;
   onMiss: () => void;
 }
@@ -49,7 +57,7 @@ function Wall({ x, z, w, h, d }: Wall3D) {
   return (
     <group position={[x, 0, z]}>
       {/* Main body */}
-      <mesh position={[0, h / 2, 0]} castShadow receiveShadow>
+      <mesh position={[0, h / 2, 0]}>
         <boxGeometry args={[w, h, d]} />
         <meshStandardMaterial color={COL_WALL} roughness={0.85} metalness={0.05} />
       </mesh>
@@ -72,10 +80,11 @@ interface HumanoidProps {
   ttl: number;
   headColor: string;
   bodyColor: string;
+  rushMode?: boolean;
   onHit: (tgt: Tgt3D, isHead: boolean, screenX: number, screenY: number) => void;
 }
 
-function Humanoid({ tgt, ttl, headColor, bodyColor, onHit }: HumanoidProps) {
+function Humanoid({ tgt, ttl, headColor, bodyColor, rushMode, onHit }: HumanoidProps) {
   const groupRef = useRef<THREE.Group>(null);
   const headMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const bodyMatRef = useRef<THREE.MeshStandardMaterial>(null);
@@ -84,22 +93,35 @@ function Humanoid({ tgt, ttl, headColor, bodyColor, onHit }: HumanoidProps) {
 
   useFrame(() => {
     const ageMs = Date.now() - tgt.born;
-    const elapsed = ageMs / ttl;
-    const popFrac = Math.min(1, ageMs / 220);
-    const popY = 1 - Math.pow(1 - popFrac, 3);
 
-    if (groupRef.current) {
-      groupRef.current.position.y = -0.9 * (1 - popY);
+    if (rushMode) {
+      // Rush: position is driven by parent (tgt.z updated externally each tick).
+      // We just sync group position to current tgt and add a subtle bob.
+      if (groupRef.current) {
+        groupRef.current.position.x = tgt.x;
+        groupRef.current.position.z = tgt.z;
+        groupRef.current.position.y = Math.sin(ageMs * 0.012) * 0.04;
+      }
+      const op = Math.min(1, ageMs / 200);
+      if (headMatRef.current) headMatRef.current.opacity = op;
+      if (bodyMatRef.current) bodyMatRef.current.opacity = op;
+      if (ringMatRef.current) ringMatRef.current.opacity = op * 0.25;
+    } else {
+      const elapsed = ageMs / ttl;
+      const popFrac = Math.min(1, ageMs / 220);
+      const popY = 1 - Math.pow(1 - popFrac, 3);
+      if (groupRef.current) {
+        groupRef.current.position.y = -0.9 * (1 - popY);
+      }
+      let op = popY;
+      if (elapsed > 0.72) {
+        const blink = Math.sin((elapsed - 0.72) * 70) > 0 ? 1 : 0.45;
+        op *= blink;
+      }
+      if (headMatRef.current) headMatRef.current.opacity = op;
+      if (bodyMatRef.current) bodyMatRef.current.opacity = op;
+      if (ringMatRef.current) ringMatRef.current.opacity = op * 0.2;
     }
-
-    let op = popY;
-    if (elapsed > 0.72) {
-      const blink = Math.sin((elapsed - 0.72) * 70) > 0 ? 1 : 0.45;
-      op *= blink;
-    }
-    if (headMatRef.current) headMatRef.current.opacity = op;
-    if (bodyMatRef.current) bodyMatRef.current.opacity = op;
-    if (ringMatRef.current) ringMatRef.current.opacity = op * 0.2;
 
     if (headMatRef.current) headMatRef.current.emissiveIntensity = hover === 'head' ? 1.2 : 0.7;
     if (bodyMatRef.current) bodyMatRef.current.emissiveIntensity = hover === 'body' ? 0.6 : 0.32;
@@ -119,6 +141,7 @@ function Humanoid({ tgt, ttl, headColor, bodyColor, onHit }: HumanoidProps) {
       {/* Head */}
       <mesh
         position={[0, 1.72, 0]}
+        userData={{ targetId: tgt.id, hitPart: 'head' }}
         onClick={handleHeadClick}
         onPointerOver={() => setHover('head')}
         onPointerOut={() => setHover(null)}
@@ -137,6 +160,7 @@ function Humanoid({ tgt, ttl, headColor, bodyColor, onHit }: HumanoidProps) {
       {/* Body */}
       <mesh
         position={[0, 0.9, 0]}
+        userData={{ targetId: tgt.id, hitPart: 'body' }}
         onClick={handleBodyClick}
         onPointerOver={() => setHover('body')}
         onPointerOut={() => setHover(null)}
@@ -167,10 +191,17 @@ interface SceneProps {
   ttl: number;
   headColor: string;
   bodyColor: string;
+  rushMode?: boolean;
+  playerX?: number;
   onHit: (tgt: Tgt3D, isHead: boolean, screenX: number, screenY: number) => void;
 }
 
-function Scene({ targets, walls, ttl, headColor, bodyColor, onHit }: SceneProps) {
+function Scene({ targets, walls, ttl, headColor, bodyColor, rushMode, playerX, onHit }: SceneProps) {
+  const cameraTargetX = playerX ?? 0;
+  useFrame(({ camera }) => {
+    // Smooth lerp toward target X for player strafe
+    camera.position.x += (cameraTargetX - camera.position.x) * 0.18;
+  });
   return (
     <>
       <color attach="background" args={[COL_FOG]} />
@@ -181,13 +212,11 @@ function Scene({ targets, walls, ttl, headColor, bodyColor, onHit }: SceneProps)
       <directionalLight
         position={[6, 12, -2]}
         intensity={0.75}
-        castShadow
-        shadow-mapSize={[1024, 1024]}
       />
       <pointLight position={[0, 4, -7]} intensity={0.4} color={headColor} distance={14} />
 
       {/* Floor */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]}>
         <planeGeometry args={[60, 60]} />
         <meshStandardMaterial color={COL_FLOOR} roughness={0.95} />
       </mesh>
@@ -218,11 +247,21 @@ function Scene({ targets, walls, ttl, headColor, bodyColor, onHit }: SceneProps)
         <meshStandardMaterial color={COL_FLOOR_HI} transparent opacity={0.15} />
       </mesh>
 
-      {/* Cover walls */}
-      {walls.map((w, i) => <Wall key={i} {...w} />)}
+      {/* Cover walls — hidden in rush mode (open arena) */}
+      {!rushMode && walls.map((w, i) => <Wall key={i} {...w} />)}
 
       {/* Targets */}
-      {targets.map(t => <Humanoid key={t.id} tgt={t} ttl={ttl} headColor={headColor} bodyColor={bodyColor} onHit={onHit} />)}
+      {targets.map(t => (
+        <Humanoid
+          key={t.id}
+          tgt={t}
+          ttl={ttl}
+          headColor={headColor}
+          bodyColor={bodyColor}
+          rushMode={rushMode}
+          onHit={onHit}
+        />
+      ))}
     </>
   );
 }
@@ -233,42 +272,98 @@ export function Cenario3D({
   enemyHead = COL_HEAD_DEF,
   enemyBody = COL_BODY_DEF,
   sensitivity = 1.0,
+  rushMode = false,
+  playerX = 0,
   onHit, onMiss,
 }: Cenario3DProps) {
-  const wrapRef = useRef<HTMLDivElement>(null);
+  const sceneRef = useRef<THREE.Scene | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const pointerRef = useRef(new THREE.Vector2());
+  const targetsRef = useRef(targets);
+  const onHitRef = useRef(onHit);
+  const onMissRef = useRef(onMiss);
 
-  const { isLocked, cooldown, cursorRef, requestLock } = useArenaPointerLock({
-    arenaRef: wrapRef,
+  useEffect(() => {
+    targetsRef.current = targets;
+    onHitRef.current = onHit;
+    onMissRef.current = onMiss;
+  }, [targets, onHit, onMiss]);
+
+  const wrapElRef = useRef<HTMLElement | null>(null);
+
+  const shootAtVirtualCursor = useCallback((clientX: number, clientY: number) => {
+    const wrap = wrapElRef.current;
+    const scene = sceneRef.current;
+    const camera = cameraRef.current;
+    if (!wrap || !scene || !camera) return false;
+
+    const rect = wrap.getBoundingClientRect();
+    const pointer = pointerRef.current;
+    pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -(((clientY - rect.top) / rect.height) * 2 - 1);
+
+    const raycaster = raycasterRef.current;
+    raycaster.setFromCamera(pointer, camera);
+    const targetHit = raycaster
+      .intersectObjects(scene.children, true)
+      .find(hit => typeof hit.object.userData?.targetId === 'number');
+    const hitData = targetHit?.object.userData as { targetId?: number; hitPart?: 'head' | 'body' } | undefined;
+    const targetId = hitData?.targetId;
+
+    if (typeof targetId === 'number') {
+      const target = targetsRef.current.find(t => t.id === targetId);
+      if (target) {
+        onHitRef.current(target, hitData?.hitPart === 'head', clientX, clientY);
+        return true;
+      }
+    }
+
+    onMissRef.current();
+    return true;
+  }, []);
+
+  const { isLocked, arenaRef: wrapRef, arenaEl, cursorRef, requestLock } = useArenaPointerLock({
     sensitivity,
     active: true,
+    onVirtualClick: shootAtVirtualCursor,
   });
+
+  useEffect(() => { wrapElRef.current = arenaEl; }, [arenaEl]);
+
+  const isLockedRef = useRef(isLocked);
+  useEffect(() => { isLockedRef.current = isLocked; }, [isLocked]);
 
   return (
     <div
       ref={wrapRef}
+      onClick={isLocked ? undefined : requestLock}
       className="relative w-full overflow-hidden border border-[rgba(255,255,255,0.1)]"
       style={{
         aspectRatio: '800 / 500',
         background: COL_FOG,
-        cursor: isLocked ? 'none' : 'default',
+        cursor: isLocked ? 'none' : 'pointer',
       }}
     >
       <Canvas
+        style={{ pointerEvents: isLocked ? 'auto' : 'none' }}
         camera={{ position: [0, 1.6, 0], fov: 78, near: 0.05, far: 60 }}
-        onCreated={({ camera, gl }) => {
+        onCreated={({ camera, scene, gl }) => {
+          cameraRef.current = camera;
+          sceneRef.current = scene;
           // Look forward (-Z) instead of R3F default lookAt(0,0,0).
           camera.rotation.set(0, 0, 0);
-          // Try to recover gracefully if the WebGL context is lost (browser
-          // sometimes drops contexts when too many are open or after long sessions).
           gl.domElement.addEventListener('webglcontextlost', (e) => {
             e.preventDefault();
-            console.warn('[cenario3d] webgl context lost — refresh the page to restore');
+            console.warn('[cenario3d] webgl context lost');
+          });
+          gl.domElement.addEventListener('webglcontextrestored', () => {
+            console.info('[cenario3d] webgl context restored');
           });
         }}
-        onPointerMissed={() => onMiss()}
+        onPointerMissed={() => { if (isLockedRef.current) onMiss(); }}
         gl={{ antialias: true, alpha: false, powerPreference: 'default' }}
-        shadows
-        dpr={[1, 2]}
+        dpr={[1, 1.5]}
       >
         <Scene
           targets={targets}
@@ -276,6 +371,8 @@ export function Cenario3D({
           ttl={ttl}
           headColor={enemyHead}
           bodyColor={enemyBody}
+          rushMode={rushMode}
+          playerX={playerX}
           onHit={onHit}
         />
       </Canvas>
@@ -296,29 +393,22 @@ export function Cenario3D({
         <CrosshairShape style={crosshair} accentColor={enemyHead} />
       </div>
 
-      {/* "CLIQUE PARA APONTAR" overlay when not locked */}
+      {/* "CLIQUE PARA APONTAR" hint when not locked — pointer-events:none so the
+          click is captured by the wrap div itself (gesture target == lock target) */}
       {!isLocked && (
-        <button
-          type="button"
-          onClick={requestLock}
-          disabled={cooldown}
-          className="absolute inset-0 flex items-center justify-center"
+        <span
+          className="absolute font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)] pointer-events-none"
           style={{
-            background: 'rgba(10,14,21,0.2)',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            color: 'rgba(255,255,255,0.9)',
+            background: 'rgba(10,14,21,0.85)',
             zIndex: 10,
-            border: 'none',
-            cursor: cooldown ? 'wait' : 'pointer',
           }}
         >
-          <span
-            className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)]"
-            style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(10,14,21,0.85)' }}
-          >
-            {cooldown
-              ? 'Aguarde 1s... (cooldown do browser)'
-              : `Clique para apontar · sens ${sensitivity}× · ESC para sair`}
-          </span>
-        </button>
+          {`Clique para apontar · sens ${sensitivity.toFixed(2)}× · ESC para sair`}
+        </span>
       )}
 
       {/* Bottom-corner mode labels */}

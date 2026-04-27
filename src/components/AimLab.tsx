@@ -1,30 +1,41 @@
-import { useState, useCallback, useRef, useEffect, lazy, Suspense } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Target, RotateCcw, Clock } from 'lucide-react';
+import { Target, RotateCcw, Clock, Maximize2, Minimize2 } from 'lucide-react';
 import type { Wall3D } from './Cenario3D';
 import type { CrosshairStyle, EnemyColorId } from './Cenario3DUI';
-import { CROSSHAIR_OPTIONS, ENEMY_COLORS, SENS_PRESETS, CrosshairPreview, CrosshairShape } from './Cenario3DUI';
+import { CROSSHAIR_OPTIONS, ENEMY_COLORS, CrosshairPreview, CrosshairShape } from './Cenario3DUI';
 import { useArenaPointerLock } from '../hooks/useArenaPointerLock';
+import { games } from '../data/games';
+import { calcCm360 } from '../engine/sensitivity';
 
 const Cenario3D = lazy(() => import('./Cenario3D').then(m => ({ default: m.Cenario3D })));
 
 const LS_CROSSHAIR = 'sensiwatch.cenario.crosshair';
 const LS_ENEMYCOL  = 'sensiwatch.cenario.enemyColor';
-const LS_SENS      = 'sensiwatch.mouse.sens';
+const LS_GAME      = 'sensiwatch.training.game';
+const LS_DPI       = 'sensiwatch.training.dpi';
+const LS_GAMESENS  = 'sensiwatch.training.gameSens'; // map gameId → sens
 
-type DrillId = 'gridshot' | 'flick' | 'microflick' | 'tracking' | 'cenario';
+// Reference cm/360 the trainer's virtual cursor is calibrated to.
+// 30 cm/360 ≈ Medium (popular pro range). Multiplier scales physical mouse
+// movement so 1 cm of mouse motion in real life equals 1 cm of in-game motion
+// regardless of which game/sens/DPI the user picked.
+const BASE_CM360 = 30;
+
+type DrillId = 'gridshot' | 'flick' | 'microflick' | 'tracking' | 'cenario' | 'rush';
 type Diff = 'easy' | 'medium' | 'hard';
 type Phase = 'menu' | 'countdown' | 'playing' | 'results';
 
 interface Tgt {
   id: number;
-  x: number;   // virtual px (0..VW) for 2D modes; world X for cenario
-  y: number;   // virtual px (0..VH) for 2D modes; ignored for cenario
-  z?: number;  // world Z for cenario 3D mode
+  x: number;   // virtual px (0..VW) for 2D modes; world X for cenario/rush
+  y: number;   // virtual px (0..VH) for 2D modes; ignored for cenario/rush
+  z?: number;  // world Z for cenario/rush 3D modes
   r: number;
   born: number;
-  vx?: number;
-  vy?: number;
+  vx?: number; // 2D tracking: x-axis velocity (px/frame); rush: world X velocity (u/s)
+  vy?: number; // 2D tracking: y-axis velocity (px/frame)
+  vz?: number; // rush: world Z velocity (u/s, positive moves toward player)
 }
 
 interface Hit { ms: number; off: number; }
@@ -38,18 +49,28 @@ const DRILLS: Record<DrillId, { name: string; desc: string; tags: string[] }> = 
   microflick: { name: 'Micro Flick', desc: 'Alvos minúsculos para precisão extrema — 20 alvos.', tags: ['PRECISÃO', 'MICRO'] },
   tracking:   { name: 'Tracking',    desc: 'Mantenha o cursor sobre o alvo em movimento — 30 segundos.', tags: ['TRACKING', 'CONTROLE'] },
   cenario:    { name: 'Cenário',     desc: 'Inimigos aparecem em ângulos de mapa real. Acerte a cabeça para pontuação máxima — 30s.', tags: ['MAPA', 'HEADSHOT'] },
+  rush:       { name: 'Rush',        desc: 'Inimigos avançam contra você. A/D para se mover. 3 strikes = fim — 30s.', tags: ['SURVIVAL', 'A/D'] },
 };
 
 const DIFFS: Record<Diff, {
   label: string; gridR: number; flickR: number; microR: number;
   trackR: number; trackV: number; ttl: number; cenarioR: number; cenarioTTL: number;
+  rushSpeed: number; rushSpawnMs: number;
 }> = {
-  easy:   { label: 'Fácil',   gridR: 28, flickR: 26, microR: 12, trackR: 26, trackV: 2.2, ttl: 4000, cenarioR: 22, cenarioTTL: 3200 },
-  medium: { label: 'Médio',   gridR: 20, flickR: 18, microR: 7,  trackR: 19, trackV: 3.6, ttl: 2600, cenarioR: 16, cenarioTTL: 2200 },
-  hard:   { label: 'Difícil', gridR: 13, flickR: 11, microR: 4,  trackR: 13, trackV: 5.2, ttl: 1600, cenarioR: 11, cenarioTTL: 1400 },
+  easy:   { label: 'Fácil',   gridR: 28, flickR: 26, microR: 12, trackR: 26, trackV: 2.2, ttl: 4000, cenarioR: 22, cenarioTTL: 3200, rushSpeed: 1.6, rushSpawnMs: 1400 },
+  medium: { label: 'Médio',   gridR: 20, flickR: 18, microR: 7,  trackR: 19, trackV: 3.6, ttl: 2600, cenarioR: 16, cenarioTTL: 2200, rushSpeed: 2.6, rushSpawnMs: 1000 },
+  hard:   { label: 'Difícil', gridR: 13, flickR: 11, microR: 4,  trackR: 13, trackV: 5.2, ttl: 1600, cenarioR: 11, cenarioTTL: 1400, rushSpeed: 4.0, rushSpawnMs: 700 },
 };
 
 const DUR = 30_000, FLICK_N = 30, MICRO_N = 20, CENARIO_N = 30;
+
+// Rush mode constants
+const RUSH_MAX_STRIKES = 3;
+const RUSH_KILL_Z = -2;        // enemies past this Z count as a strike
+const RUSH_SPAWN_Z = -18;      // enemies spawn at this Z (further from player)
+const RUSH_PLAYER_LIMIT = 5;   // ±X movement bound
+const RUSH_PLAYER_SPEED = 6;   // units per second strafe
+const RUSH_SPAWN_X_RANGE = 4.5; // enemies spawn between -X and +X
 
 // 3D world walls (positions/sizes in meters, x=0 is camera center, -Z = forward)
 const WALLS_3D: Wall3D[] = [
@@ -103,6 +124,7 @@ function getRating(sc: number, drill: DrillId, diff: Diff): string {
     microflick: { easy: [6000, 4000, 2500, 1200],  medium: [5000, 3200, 1800, 900],  hard: [3500, 2200, 1200, 600]  },
     tracking:   { easy: [2800, 2000, 1200, 600],   medium: [2200, 1600, 1000, 500],  hard: [1800, 1200, 700, 300]   },
     cenario:    { easy: [11000, 7500, 4500, 2000], medium: [9000, 6000, 3500, 1500], hard: [6500, 4000, 2200, 1000] },
+    rush:       { easy: [12000, 8000, 5000, 2500], medium: [9500, 6500, 4000, 2000], hard: [7000, 4500, 2500, 1200] },
   };
   const [s, a, b, c] = T[drill][diff];
   return sc >= s ? 'S' : sc >= a ? 'A' : sc >= b ? 'B' : sc >= c ? 'C' : 'D';
@@ -133,6 +155,11 @@ export function AimLab() {
   const [trackPct, setTrackPct] = useState(0);
   const [isOnTarget, setIsOnTarget] = useState(false);
   const [headshots, setHeadshots] = useState(0);
+  const [strikes, setStrikes] = useState(0);
+  const [playerX, setPlayerX] = useState(0);
+  const playerXRef = useRef(0);
+  const strikesRef = useRef(0);
+  const keysRef = useRef<{ left: boolean; right: boolean }>({ left: false, right: false });
 
   // Cenario customization (persisted)
   const [crosshair, setCrosshair] = useState<CrosshairStyle>(() => {
@@ -143,25 +170,62 @@ export function AimLab() {
     if (typeof window === 'undefined') return 'cyan';
     return (localStorage.getItem(LS_ENEMYCOL) as EnemyColorId) || 'cyan';
   });
-  const [mouseSens, setMouseSens] = useState<number>(() => {
-    if (typeof window === 'undefined') return 1.0;
-    const v = parseFloat(localStorage.getItem(LS_SENS) || '1');
-    return isFinite(v) && v > 0 ? v : 1.0;
+  const [gameId, setGameId] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'cs2';
+    return localStorage.getItem(LS_GAME) || 'cs2';
+  });
+  const [dpi, setDpi] = useState<number>(() => {
+    if (typeof window === 'undefined') return 800;
+    const v = parseFloat(localStorage.getItem(LS_DPI) || '800');
+    return isFinite(v) && v > 0 ? v : 800;
+  });
+  const [gameSensMap, setGameSensMap] = useState<Record<string, number>>(() => {
+    if (typeof window === 'undefined') return {};
+    try { return JSON.parse(localStorage.getItem(LS_GAMESENS) || '{}'); }
+    catch { return {}; }
   });
   useEffect(() => { localStorage.setItem(LS_CROSSHAIR, crosshair); }, [crosshair]);
   useEffect(() => { localStorage.setItem(LS_ENEMYCOL, enemyColor); }, [enemyColor]);
-  useEffect(() => { localStorage.setItem(LS_SENS, String(mouseSens)); }, [mouseSens]);
+  useEffect(() => { localStorage.setItem(LS_GAME, gameId); }, [gameId]);
+  useEffect(() => { localStorage.setItem(LS_DPI, String(dpi)); }, [dpi]);
+  useEffect(() => { localStorage.setItem(LS_GAMESENS, JSON.stringify(gameSensMap)); }, [gameSensMap]);
+
   const enemyPreset = ENEMY_COLORS.find(c => c.id === enemyColor) ?? ENEMY_COLORS[0];
+  const selectedGame = useMemo(() => games.find(g => g.id === gameId) ?? games[0], [gameId]);
+  const gameSens = gameSensMap[selectedGame.id] ?? selectedGame.defaultSens;
+  const setGameSens = useCallback((v: number) => {
+    setGameSensMap(m => ({ ...m, [selectedGame.id]: v }));
+  }, [selectedGame.id]);
+  const cm360 = useMemo(() => calcCm360(dpi, gameSens, selectedGame.yaw), [dpi, gameSens, selectedGame.yaw]);
+  // Trainer's internal multiplier — scales physical mouse motion so 1cm IRL ≈ 1cm in-game
+  const mouseSens = cm360 > 0 ? BASE_CM360 / cm360 : 1;
 
   const hsRef = useRef(0);
 
-  const arenaRef    = useRef<HTMLDivElement>(null);
   const rAF         = useRef(0);
   const timerI      = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const expireI     = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const nid         = useRef(1);
   const mouse       = useRef({ x: VW / 2, y: VH / 2 });
   const prevOnTgt   = useRef(false);
+  const sectionRef  = useRef<HTMLElement | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      sectionRef.current?.requestFullscreen?.().catch((err) => {
+        console.warn('[fullscreen] failed:', err);
+      });
+    }
+  }, []);
 
   // Mutable game-state refs to avoid stale closures in loops
   const sRef  = useRef(0);
@@ -173,21 +237,39 @@ export function AimLab() {
   const tfRef = useRef({ total: 0, on: 0 });
   const game  = useRef<{ drill: DrillId; diff: Diff; cfg: typeof DIFFS[Diff] } | null>(null);
 
+  // Pointer lock for 2D arena (gridshot / flick / microflick / tracking).
+  // Cenario3D has its own internal pointer lock since the arena lives there.
+  const arena2DActive = phase === 'playing' && game.current?.drill !== 'cenario';
+  const {
+    isLocked: arena2DLocked,
+    cooldown: arena2DCooldown,
+    arenaRef,
+    arenaEl,
+    cursorRef: arena2DCursorRef,
+    requestLock: arena2DRequestLock,
+  } = useArenaPointerLock({
+    sensitivity: mouseSens,
+    active: arena2DActive,
+    onMove: (vx, vy, w, h) => {
+      // Feed virtual cursor into mouse.current so the tracking drill sees it
+      mouse.current = { x: (vx / w) * VW, y: (vy / h) * VH };
+    },
+  });
+
   const setTgts = useCallback((ts: Tgt[]) => {
     tRef.current = ts;
     setTargets(ts);
   }, []);
 
   const popPts = useCallback((pts: number, cx: number, cy: number) => {
-    const ar = arenaRef.current;
-    if (!ar) return;
-    const rc = ar.getBoundingClientRect();
+    if (!arenaEl) return;
+    const rc = arenaEl.getBoundingClientRect();
     const xp = ((cx - rc.left) / rc.width) * 100;
     const yp = ((cy - rc.top) / rc.height) * 100;
     const id = performance.now() + Math.random();
     setPopups(p => [...p, { id, xp, yp, pts }]);
     setTimeout(() => setPopups(p => p.filter(x => x.id !== id)), 700);
-  }, []);
+  }, [arenaEl]);
 
   const finish = useCallback(() => {
     cancelAnimationFrame(rAF.current);
@@ -233,6 +315,22 @@ export function AimLab() {
     setTgts([t]);
   }, [setTgts]);
 
+  const spawnRushEnemy = useCallback(() => {
+    const cfg = game.current!.cfg;
+    const x = rnd(-RUSH_SPAWN_X_RANGE, RUSH_SPAWN_X_RANGE);
+    // Lateral velocity: ~40% of forward speed, random direction
+    const lateralSpeed = cfg.rushSpeed * 0.4;
+    const t: Tgt = {
+      id: nid.current++,
+      x, y: 0, z: RUSH_SPAWN_Z,
+      r: 1, born: Date.now(),
+      vz: cfg.rushSpeed,
+      vx: (Math.random() < 0.5 ? -1 : 1) * lateralSpeed,
+    };
+    tRef.current = [...tRef.current, t];
+    setTargets(tRef.current);
+  }, []);
+
   const spawnCenarioTargets = useCallback((existing: Tgt[], total: number): Tgt[] => {
     const occupiedKeys = new Set(existing.map(t => `${t.x},${t.z}`));
     const available = PEEK_SPOTS_3D.filter(s => !occupiedKeys.has(`${s.x},${s.z}`));
@@ -254,6 +352,9 @@ export function AimLab() {
     setScore(0); setHits([]); setMisses(0); setTL(DUR);
     setCleared(0); setWaves(0); setPopups([]); setTrackPct(0); setIsOnTarget(false);
     setHeadshots(0);
+    setStrikes(0); setPlayerX(0);
+    strikesRef.current = 0; playerXRef.current = 0;
+    keysRef.current = { left: false, right: false };
     sRef.current = 0; hRef.current = []; mRef.current = 0; clRef.current = 0;
     wvRef.current = 0; tfRef.current = { total: 0, on: 0 }; nid.current = 1; hsRef.current = 0;
     setCd(3);
@@ -274,9 +375,10 @@ export function AimLab() {
     if (g.drill === 'gridshot') spawnGrid();
     else if (g.drill === 'flick' || g.drill === 'microflick') spawnFlick();
     else if (g.drill === 'cenario') spawnCenarioTargets([], 0);
+    else if (g.drill === 'rush') spawnRushEnemy();
     else spawnTrack();
 
-    if (g.drill === 'gridshot' || g.drill === 'tracking' || g.drill === 'cenario') {
+    if (g.drill === 'gridshot' || g.drill === 'tracking' || g.drill === 'cenario' || g.drill === 'rush') {
       const t0 = Date.now();
       timerI.current = setInterval(() => {
         const rem = Math.max(0, DUR - (Date.now() - t0));
@@ -316,6 +418,85 @@ export function AimLab() {
           spawnCenarioTargets(surviving, newCl);
         }
       }, 60);
+    }
+
+    if (g.drill === 'rush') {
+      // Continuous spawn loop
+      expireI.current = setInterval(() => {
+        spawnRushEnemy();
+      }, g.cfg.rushSpawnMs);
+
+      // Movement + strike-detection loop (rAF for smoothness)
+      let lastT = performance.now();
+      const tick = () => {
+        const nowT = performance.now();
+        const dt = Math.min(0.05, (nowT - lastT) / 1000); // clamp dt to avoid jumps
+        lastT = nowT;
+
+        // Player strafe via A/D
+        const k = keysRef.current;
+        const dir = (k.right ? 1 : 0) - (k.left ? 1 : 0);
+        if (dir !== 0) {
+          const next = playerXRef.current + dir * RUSH_PLAYER_SPEED * dt;
+          playerXRef.current = Math.max(-RUSH_PLAYER_LIMIT, Math.min(RUSH_PLAYER_LIMIT, next));
+          setPlayerX(playerXRef.current);
+        }
+
+        // Mutate z and x in place — Humanoid reads tgt.{x,z} each frame via useFrame,
+        // so we don't need to setTargets to reflect movement.
+        for (const t of tRef.current) {
+          if (t.vz !== undefined && t.z !== undefined) {
+            t.z = t.z + t.vz * dt;
+          }
+          if (t.vx !== undefined) {
+            t.x = t.x + t.vx * dt;
+            // Bounce off arena edges so they don't wander out of view
+            if (t.x > RUSH_SPAWN_X_RANGE && t.vx > 0) t.vx = -t.vx;
+            else if (t.x < -RUSH_SPAWN_X_RANGE && t.vx < 0) t.vx = -t.vx;
+            // Random direction flip ~once per 1.5s on average
+            else if (Math.random() < dt * 0.66) t.vx = -t.vx;
+          }
+        }
+        const past = tRef.current.filter(t => (t.z ?? 0) >= RUSH_KILL_Z);
+        if (past.length > 0) {
+          const surviving = tRef.current.filter(t => (t.z ?? 0) < RUSH_KILL_Z);
+          tRef.current = surviving;
+          setTargets(surviving);
+          mRef.current += past.length;
+          setMisses(m => m + past.length);
+          strikesRef.current += past.length;
+          setStrikes(strikesRef.current);
+          if (strikesRef.current >= RUSH_MAX_STRIKES) {
+            cancelAnimationFrame(rAF.current);
+            clearInterval(timerI.current);
+            clearInterval(expireI.current);
+            finish();
+            return;
+          }
+        }
+        rAF.current = requestAnimationFrame(tick);
+      };
+      rAF.current = requestAnimationFrame(tick);
+
+      // Keyboard listeners for A/D and arrows
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft')  keysRef.current.left = true;
+        if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') keysRef.current.right = true;
+      };
+      const onKeyUp = (e: KeyboardEvent) => {
+        if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft')  keysRef.current.left = false;
+        if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') keysRef.current.right = false;
+      };
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
+
+      return () => {
+        clearInterval(timerI.current);
+        clearInterval(expireI.current);
+        cancelAnimationFrame(rAF.current);
+        window.removeEventListener('keydown', onKeyDown);
+        window.removeEventListener('keyup', onKeyUp);
+      };
     }
 
     return () => {
@@ -369,6 +550,9 @@ export function AimLab() {
 
   const handleHit = useCallback((tgt: Tgt, e: React.MouseEvent, cenarioHead?: boolean) => {
     e.stopPropagation();
+    // Ignore clicks on targets that are mid-exit-animation (no longer in tRef).
+    // Without this, clicking near where a previous target was can double-register.
+    if (!tRef.current.some(t => t.id === tgt.id)) return;
     const g = game.current!;
     const ms = Date.now() - tgt.born;
     let pts: number;
@@ -423,39 +607,21 @@ export function AimLab() {
   const handleMiss = useCallback((e: React.MouseEvent) => {
     if (phase !== 'playing') return;
     const g = game.current;
-    if (!g || (g.drill !== 'flick' && g.drill !== 'microflick' && g.drill !== 'cenario')) return;
-    if ((e.target as HTMLElement) !== arenaRef.current) return;
+    // Tracking is continuous-aim — discrete misses don't apply.
+    if (!g || g.drill === 'tracking') return;
+    if ((e.target as HTMLElement) !== arenaEl) return;
     mRef.current++;
     setMisses(m => m + 1);
-  }, [phase]);
+  }, [phase, arenaEl]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    const ar = arenaRef.current;
-    if (!ar) return;
-    const rc = ar.getBoundingClientRect();
+    if (!arenaEl) return;
+    const rc = arenaEl.getBoundingClientRect();
     mouse.current = {
       x: ((e.clientX - rc.left) / rc.width) * VW,
       y: ((e.clientY - rc.top) / rc.height) * VH,
     };
-  }, []);
-
-  // Pointer lock for 2D arena (gridshot / flick / microflick / tracking).
-  // Cenario3D has its own internal pointer lock since the arena lives there.
-  const arena2DActive = phase === 'playing' && game.current?.drill !== 'cenario';
-  const {
-    isLocked: arena2DLocked,
-    cooldown: arena2DCooldown,
-    cursorRef: arena2DCursorRef,
-    requestLock: arena2DRequestLock,
-  } = useArenaPointerLock({
-    arenaRef,
-    sensitivity: mouseSens,
-    active: arena2DActive,
-    onMove: (vx, vy, w, h) => {
-      // Feed virtual cursor into mouse.current so the tracking drill sees it
-      mouse.current = { x: (vx / w) * VW, y: (vy / h) * VH };
-    },
-  });
+  }, [arenaEl]);
 
   // 3D cenario: hit comes from Three.js scene with screen coords for popup
   const handleCenario3DHit = useCallback((tgt: { id: number; x: number; z: number; born: number }, isHead: boolean, sx: number, sy: number) => {
@@ -487,6 +653,40 @@ export function AimLab() {
     setMisses(m => m + 1);
   }, []);
 
+  // Rush mode hit — score scales with proximity (closer enemy = more points = harder dodge),
+  // and headshot bonus.
+  const handleRushHit = useCallback((tgt: { id: number; x: number; z: number; born: number }, isHead: boolean, sx: number, sy: number) => {
+    const realTgt = tRef.current.find(t => t.id === tgt.id);
+    if (!realTgt) return;
+    const ms = Date.now() - realTgt.born;
+    const z = realTgt.z ?? RUSH_SPAWN_Z;
+    // Distance factor: 1.0 when at spawn (-18, far away — easy), drops as enemy approaches.
+    // Reward early kills; closer kills = lower score.
+    const distFrac = Math.max(0, Math.min(1, (z - RUSH_SPAWN_Z) / (RUSH_KILL_Z - RUSH_SPAWN_Z)));
+    const proximityBonus = Math.round(400 * (1 - distFrac));
+    const baseB = Math.max(0, 800 - ms);
+    const pts = Math.round(baseB + proximityBonus + (isHead ? 500 : 100));
+    if (isHead) { hsRef.current++; setHeadshots(h => h + 1); }
+    sRef.current += pts;
+    setScore(s => s + pts);
+    const off = isHead ? 0 : 0.6;
+    const nh = [...hRef.current, { ms, off }];
+    hRef.current = nh;
+    setHits(nh);
+    popPts(pts, sx, sy);
+    const surviving = tRef.current.filter(t => t.id !== tgt.id);
+    tRef.current = surviving;
+    setTargets(surviving);
+    clRef.current++;
+    setCleared(clRef.current);
+  }, [popPts]);
+
+  const handleRushMiss = useCallback(() => {
+    if (game.current?.drill !== 'rush') return;
+    mRef.current++;
+    setMisses(m => m + 1);
+  }, []);
+
   const g = game.current;
   const totalShots = hits.length + misses;
   const accuracy = totalShots > 0 ? Math.round((hits.length / totalShots) * 100) : 0;
@@ -499,10 +699,12 @@ export function AimLab() {
 
   return (
     <motion.section
+      ref={sectionRef}
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
       className="flex flex-col gap-6"
+      style={isFullscreen ? { background: '#1f2228', padding: '32px', minHeight: '100vh' } : undefined}
     >
       <div className="flex items-center gap-3">
         <Target size={18} style={{ color: 'rgba(255,255,255,0.5)' }} />
@@ -562,29 +764,79 @@ export function AimLab() {
               </div>
             </div>
 
-            {/* Sensibilidade (global, all modes) */}
+            {/* Game / DPI / In-game sens — drives the trainer's effective mouse speed */}
             <div className="flex flex-col gap-3">
               <span className="font-mono text-[11px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>
-                Sensibilidade do Mouse
+                Sensibilidade · Calibrada pelo Jogo
               </span>
-              <div className="flex gap-2 flex-wrap">
-                {SENS_PRESETS.map(p => (
-                  <button
-                    key={p.value}
-                    onClick={() => setMouseSens(p.value)}
-                    className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border transition-all"
-                    style={{
-                      borderColor: mouseSens === p.value ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.1)',
-                      color: mouseSens === p.value ? '#fff' : 'rgba(255,255,255,0.4)',
-                      background: mouseSens === p.value ? 'rgba(255,255,255,0.06)' : 'transparent',
-                    }}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* Jogo */}
+                <label className="flex flex-col gap-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    Jogo
+                  </span>
+                  <select
+                    value={gameId}
+                    onChange={(e) => setGameId(e.target.value)}
+                    className="font-mono text-[13px] tracking-[1.4px] px-3 py-2.5 border bg-transparent text-white outline-none focus:border-white/40 transition-colors appearance-none cursor-pointer"
+                    style={{ borderColor: 'rgba(255,255,255,0.15)', background: 'rgba(31,34,40,0.5)' }}
                   >
-                    {p.label}
-                  </button>
-                ))}
+                    {games.map(g => (
+                      <option key={g.id} value={g.id} style={{ background: '#1f2228' }}>{g.name}</option>
+                    ))}
+                  </select>
+                </label>
+                {/* DPI */}
+                <label className="flex flex-col gap-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    DPI do Mouse
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    step="50"
+                    min="100"
+                    max="40000"
+                    value={dpi}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      if (isFinite(v) && v > 0) setDpi(v);
+                    }}
+                    className="font-mono text-[13px] tracking-[1.4px] px-3 py-2.5 border bg-transparent text-white outline-none focus:border-white/40 transition-colors"
+                    style={{ borderColor: 'rgba(255,255,255,0.15)' }}
+                  />
+                </label>
+                {/* Sens in-game */}
+                <label className="flex flex-col gap-1.5">
+                  <span className="font-mono text-[10px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    Sens · {selectedGame.name.split(' ')[0]}
+                  </span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step={selectedGame.sensStep}
+                    min={selectedGame.sensRange[0]}
+                    max={selectedGame.sensRange[1]}
+                    value={gameSens}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      if (isFinite(v) && v > 0) setGameSens(v);
+                    }}
+                    className="font-mono text-[13px] tracking-[1.4px] px-3 py-2.5 border bg-transparent text-white outline-none focus:border-white/40 transition-colors"
+                    style={{ borderColor: 'rgba(255,255,255,0.15)' }}
+                  />
+                </label>
+              </div>
+              <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[1.4px]" style={{ color: 'rgba(255,255,255,0.4)' }}>
+                <span>
+                  cm/360 · <span className="text-white">{cm360.toFixed(1)}</span>
+                </span>
+                <span style={{ color: 'rgba(255,255,255,0.3)' }}>
+                  Multiplier interno · {mouseSens.toFixed(2)}×
+                </span>
               </div>
               <span className="font-mono text-[10px]" style={{ color: 'rgba(255,255,255,0.3)' }}>
-                Multiplicador aplicado via pointer lock — afeta todos os modos.
+                O treino é calibrado pelo seu jogo — 1 cm de mouse no treino = 1 cm no jogo.
               </span>
             </div>
 
@@ -641,12 +893,22 @@ export function AimLab() {
               </div>
             )}
 
-            <button
-              onClick={startGame}
-              className="font-mono text-[14px] uppercase tracking-[1.4px] px-8 py-3 bg-white text-[#1f2228] hover:opacity-90 transition-opacity self-start"
-            >
-              Iniciar Treino
-            </button>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={startGame}
+                className="font-mono text-[14px] uppercase tracking-[1.4px] px-8 py-3 bg-white text-[#1f2228] hover:opacity-90 transition-opacity"
+              >
+                Iniciar Treino
+              </button>
+              <button
+                onClick={toggleFullscreen}
+                className="flex items-center gap-2 font-mono text-[12px] uppercase tracking-[1.4px] px-5 py-3 border border-[rgba(255,255,255,0.15)] hover:bg-[rgba(255,255,255,0.04)] transition-colors"
+                style={{ color: 'rgba(255,255,255,0.7)' }}
+              >
+                {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                {isFullscreen ? 'Sair do Fullscreen' : 'Fullscreen'}
+              </button>
+            </div>
           </motion.div>
         )}
 
@@ -683,9 +945,16 @@ export function AimLab() {
                 )}
                 {g?.drill === 'gridshot' && <span>Waves: <span className="text-white">{waves}</span></span>}
                 {g?.drill === 'cenario' && <span>HS: <span className="text-white">{headshots}</span></span>}
+                {g?.drill === 'rush' && (
+                  <>
+                    <span>Eliminados: <span className="text-white">{cleared}</span></span>
+                    <span>HS: <span className="text-white">{headshots}</span></span>
+                    <span>Strikes: <span className="text-white">{strikes}/{RUSH_MAX_STRIKES}</span></span>
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-4">
-                {(g?.drill === 'gridshot' || g?.drill === 'tracking' || g?.drill === 'cenario') && (
+                {(g?.drill === 'gridshot' || g?.drill === 'tracking' || g?.drill === 'cenario' || g?.drill === 'rush') && (
                   <span className="flex items-center gap-1.5">
                     <Clock size={11} />
                     {(timeLeft / 1000).toFixed(1)}s
@@ -701,7 +970,7 @@ export function AimLab() {
             </div>
 
             {/* Arena — 3D for cenario, 2D for everything else */}
-            {g?.drill === 'cenario' ? (
+            {(g?.drill === 'cenario' || g?.drill === 'rush') ? (
               <div ref={arenaRef} className="relative w-full">
                 <Suspense fallback={
                   <div className="flex items-center justify-center border border-[rgba(255,255,255,0.1)]" style={{ aspectRatio: '800 / 500', background: '#0a0e15' }}>
@@ -709,15 +978,17 @@ export function AimLab() {
                   </div>
                 }>
                   <Cenario3D
-                    targets={targets.filter(t => t.z !== undefined).map(t => ({ id: t.id, x: t.x, z: t.z!, born: t.born }))}
+                    targets={targets.filter(t => t.z !== undefined).map(t => ({ id: t.id, x: t.x, z: t.z!, born: t.born, vx: t.vx, vz: t.vz }))}
                     walls={WALLS_3D}
-                    ttl={g.cfg.cenarioTTL}
+                    ttl={g.drill === 'rush' ? 99999 : g.cfg.cenarioTTL}
                     crosshair={crosshair}
                     enemyHead={enemyPreset.head}
                     enemyBody={enemyPreset.body}
                     sensitivity={mouseSens}
-                    onHit={handleCenario3DHit}
-                    onMiss={handleCenario3DMiss}
+                    rushMode={g.drill === 'rush'}
+                    playerX={playerX}
+                    onHit={g.drill === 'rush' ? handleRushHit : handleCenario3DHit}
+                    onMiss={g.drill === 'rush' ? handleRushMiss : handleCenario3DMiss}
                   />
                 </Suspense>
                 {/* Score popups overlay */}
@@ -747,7 +1018,7 @@ export function AimLab() {
             ) : (
             <div
               ref={arenaRef}
-              onClick={handleMiss}
+              onClick={arena2DLocked ? handleMiss : arena2DRequestLock}
               onMouseMove={handleMouseMove}
               className="relative overflow-hidden select-none border border-[rgba(255,255,255,0.1)]"
               style={{
@@ -782,41 +1053,36 @@ export function AimLab() {
                 <CrosshairShape style={crosshair} accentColor={enemyPreset.head} />
               </div>
 
-              {/* "CLIQUE PARA APONTAR" overlay when not locked */}
+              {/* "CLIQUE PARA APONTAR" hint when not locked — pointer-events:none on every layer
+                  so the click is always captured by the arena div (gesture target == lock target) */}
               {!arena2DLocked && (
-                <button
-                  type="button"
-                  onClick={arena2DRequestLock}
-                  disabled={arena2DCooldown}
-                  className="absolute inset-0 flex items-center justify-center"
+                <span
+                  className="absolute font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)] pointer-events-none"
                   style={{
-                    background: 'rgba(31,34,40,0.2)',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    color: 'rgba(255,255,255,0.9)',
+                    background: 'rgba(31,34,40,0.85)',
                     zIndex: 10,
-                    border: 'none',
-                    cursor: arena2DCooldown ? 'wait' : 'pointer',
                   }}
                 >
-                  <span
-                    className="font-mono text-[12px] uppercase tracking-[1.4px] px-4 py-2.5 border border-[rgba(255,255,255,0.2)]"
-                    style={{ color: 'rgba(255,255,255,0.9)', background: 'rgba(31,34,40,0.85)' }}
-                  >
-                    {arena2DCooldown
-                      ? 'Aguarde 1s... (cooldown do browser)'
-                      : `Clique para apontar · sens ${mouseSens}× · ESC para sair`}
-                  </span>
-                </button>
+                  {arena2DCooldown
+                    ? 'Aguarde 1s... (cooldown do browser)'
+                    : `Clique para apontar · ${cm360.toFixed(1)} cm/360 · ESC para sair`}
+                </span>
               )}
 
               {/* Targets */}
               <AnimatePresence>
                 {targets.map(tgt => {
-                  const aW = arenaRef.current?.clientWidth ?? VW;
-                  const aH = arenaRef.current?.clientHeight ?? VH;
+                  const aW = arenaEl?.clientWidth ?? VW;
+                  const aH = arenaEl?.clientHeight ?? VH;
                   const scaleF = Math.min(aW / VW, aH / VH);
                   const scaledR = tgt.r * scaleF;
                   const isTracking = g?.drill === 'tracking';
                   const ttl = g?.cfg.ttl ?? 2600;
-                  const lifeFrac = isTracking ? 1 : Math.max(0, 1 - (Date.now() - tgt.born) / ttl);
+                  const isFlick = g?.drill === 'flick' || g?.drill === 'microflick';
                   const circ = Math.PI * scaledR * 1.8;
 
                   return (
@@ -834,6 +1100,9 @@ export function AimLab() {
                         width: scaledR * 2,
                         height: scaledR * 2,
                         transform: 'translate(-50%, -50%)',
+                        // Targets ignore real-mouse clicks until pointer lock is engaged —
+                        // shots only count via the virtual cursor synthesized by useArenaPointerLock.
+                        pointerEvents: arena2DLocked ? 'auto' : 'none',
                         background: isTracking
                           ? (isOnTarget ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)')
                           : 'rgba(255,255,255,0.92)',
@@ -849,11 +1118,13 @@ export function AimLab() {
                           <div className="absolute rounded-full" style={{ inset: '28%', border: '1.5px solid #1f2228', opacity: 0.4 }} />
                           <div className="absolute rounded-full" style={{ width: 4, height: 4, top: '50%', left: '50%', transform: 'translate(-50%,-50%)', background: '#1f2228' }} />
                           <svg className="absolute inset-0 w-full h-full -rotate-90" style={{ opacity: 0.3 }}>
-                            <circle
+                            <motion.circle
                               cx="50%" cy="50%" r="45%"
                               fill="none" stroke="#1f2228" strokeWidth="2"
                               strokeDasharray={circ}
-                              strokeDashoffset={circ * (1 - lifeFrac)}
+                              initial={{ strokeDashoffset: 0 }}
+                              animate={{ strokeDashoffset: isFlick ? circ : 0 }}
+                              transition={{ duration: isFlick ? ttl / 1000 : 0, ease: 'linear' }}
                             />
                           </svg>
                         </>
@@ -898,13 +1169,23 @@ export function AimLab() {
               </div>
             )}
 
-            <button
-              onClick={cancelGame}
-              className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[1.4px] self-start hover:opacity-50 transition-opacity"
-              style={{ color: 'rgba(255,255,255,0.3)' }}
-            >
-              <RotateCcw size={11} /> Cancelar
-            </button>
+            <div className="flex items-center gap-5 self-start">
+              <button
+                onClick={cancelGame}
+                className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[1.4px] hover:opacity-50 transition-opacity"
+                style={{ color: 'rgba(255,255,255,0.3)' }}
+              >
+                <RotateCcw size={11} /> Cancelar
+              </button>
+              <button
+                onClick={toggleFullscreen}
+                className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[1.4px] hover:opacity-50 transition-opacity"
+                style={{ color: 'rgba(255,255,255,0.3)' }}
+              >
+                {isFullscreen ? <Minimize2 size={11} /> : <Maximize2 size={11} />}
+                {isFullscreen ? 'Sair do Fullscreen' : 'Fullscreen'}
+              </button>
+            </div>
           </motion.div>
         )}
 
@@ -974,6 +1255,14 @@ export function AimLab() {
                   <StatCard label="Precisão" value={`${accuracy}%`} />
                   <StatCard label="Reação Média" value={hits.length > 0 ? `${avgMs}ms` : '—'} />
                   <StatCard label="HS Rate" value={hits.length > 0 ? `${Math.round((headshots / hits.length) * 100)}%` : '—'} />
+                </>
+              )}
+              {g.drill === 'rush' && (
+                <>
+                  <StatCard label="Eliminados" value={String(cleared)} />
+                  <StatCard label="Headshots" value={String(headshots)} />
+                  <StatCard label="Strikes" value={`${strikes}/${RUSH_MAX_STRIKES}`} />
+                  <StatCard label="Precisão" value={`${accuracy}%`} />
                 </>
               )}
             </div>
