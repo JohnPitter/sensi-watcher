@@ -1047,7 +1047,8 @@ export function AimLab() {
                   opacity: arena2DLocked ? 1 : 0,
                   transition: 'opacity 0.15s',
                   willChange: 'transform',
-                  zIndex: 5,
+                  zIndex: 50,
+                  filter: 'drop-shadow(0 0 1px rgba(0,0,0,0.95)) drop-shadow(0 0 2px rgba(0,0,0,0.7))',
                 }}
               >
                 <CrosshairShape style={crosshair} accentColor={enemyPreset.head} />
